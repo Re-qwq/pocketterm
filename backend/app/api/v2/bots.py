@@ -33,6 +33,7 @@ class UpdateBotConfigRequest(BaseModel):
     server_code: Optional[str] = Field(None, max_length=64, description="租赁服编号")
     server_type: Optional[str] = Field(None, max_length=32, description="服务器类型")
     access_point_type: Optional[str] = Field(None, max_length=32, description="接入点类型")
+    game_version: Optional[str] = Field(None, max_length=32, description="游戏版本")
     config: Optional[dict] = None
 
 
@@ -259,13 +260,10 @@ async def list_accounts(request: Request):
 
 class CreateBotFromPoolRequest(BaseModel):
     name: str
-    server_type: str = "rental"
-    server_code: str = ""
-    game_version: str = "1.21.93"
-    access_point_type: str = "neomega"
     account_source: str = "pool"  # pool 或 new
     username_4399: str = ""
     password_4399: str = ""
+    captcha_answer: str = ""
 
 
 @router.post("/create")
@@ -340,21 +338,21 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
             name=f"{user['username']}的面板",
         )
 
-    # 创建机器人
+    # 创建机器人 - 使用默认配置，用户可在面板设置中修改
     config = {
-        "server_type": req.server_type,
-        "server_code": req.server_code,
-        "game_version": req.game_version,
-        "access_point_type": req.access_point_type,
+        "server_type": "rental",
+        "server_code": "",
+        "game_version": "1.21.93",
+        "access_point_type": "neomega",
     }
 
     bot_id = await db.create_bot_instance(
         panel_id=panel_id,
         name=req.name,
         account_id=account_id,
-        server_code=req.server_code,
-        server_type=req.server_type,
-        access_point_type=req.access_point_type,
+        server_code="",
+        server_type="rental",
+        access_point_type="neomega",
         config=json.dumps(config),
     )
 
@@ -608,6 +606,8 @@ async def update_bot_config(bot_id: str, req: UpdateBotConfigRequest, request: R
     old_config = json.loads(bot["config"]) if bot["config"] else {}
     if req.config:
         old_config.update(req.config)
+    if req.game_version:
+        old_config["game_version"] = req.game_version
 
     config_json = json.dumps(old_config, ensure_ascii=False)
 

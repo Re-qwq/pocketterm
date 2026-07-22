@@ -182,7 +182,8 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         var(--bg-app);
     transition: opacity 0.4s ease;
     overflow-y: auto;
-    padding-top: 20px;
+    align-items: flex-start;
+    padding-top: 60px;
     padding-bottom: 120px;
 }
 #authScreen.fade-out { opacity: 0; visibility: hidden; pointer-events: none; }
@@ -1366,7 +1367,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 |  __/| |_| | (__|   <  __/| | (_) | (_) || |
 |_|    \__,_|\___|_|\_\___||_|\___/ \___/ |_|
     </pre>
-    <div class="boot-version">Version <span>v2.1.0</span></div>
+    <div class="boot-version">Version <span>v1.2</span></div>
     <div class="boot-loader">
         <span class="dot"></span>
         <span class="dot"></span>
@@ -1478,7 +1479,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         <div class="topbar-brand">
             <div class="brand-icon"><i class="fas fa-terminal"></i></div>
             <span class="brand-name">PocketTerm</span>
-            <span class="brand-version">v2.1.0</span>
+            <span class="brand-version">v1.2</span>
         </div>
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
@@ -1854,9 +1855,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                                     </div>
                                     <div class="form-group">
                                         <label class="form-label" for="botConfigAccount">
-                                            <i class="fas fa-user-circle"></i> 游戏账号 ID
+                                            <i class="fas fa-cookie-bite"></i> 选择已有账号
                                         </label>
-                                        <input type="text" class="form-input mono" id="botConfigAccount" placeholder="account_id">
+                                        <select class="form-input filter-select" id="botConfigAccount" style="width:100%;">
+                                            <option value="">-- 请选择账号 --</option>
+                                        </select>
                                     </div>
                                     <div class="form-group">
                                         <label class="form-label" for="botConfigServerCode">
@@ -1955,11 +1958,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <button class="btn btn-ghost btn-sm" onclick="switchView('bots')">
                     <i class="fas fa-arrow-left"></i> 返回
                 </button>
-                <h3 style="margin:0;"><i class="fas fa-plus-circle"></i> 创建机器人</h3>
+                <h3 style="margin:0;"><i class="fas fa-plus-circle"></i> 创建游戏账号</h3>
             </div>
             <div class="auth-card" style="max-width:500px;margin:0 auto;">
                 <div class="form-group">
-                    <label class="form-label"><i class="fas fa-tag"></i> 机器人名称</label>
+                    <label class="form-label"><i class="fas fa-tag"></i> 机器人名称（游戏内名称）</label>
                     <input type="text" class="form-input" id="createBotName" placeholder="给机器人起个名字" maxlength="20">
                 </div>
                 <div class="form-group">
@@ -1969,47 +1972,38 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                         <option value="new">创建新4399账号</option>
                     </select>
                 </div>
-                <div class="form-group" id="createBotAccountGroup" style="display:none;">
-                    <label class="form-label"><i class="fas fa-cookie"></i> 4399用户名</label>
-                    <input type="text" class="form-input" id="createBot4399User" placeholder="4399用户名">
+                <div id="createBot4399Fields" style="display:none;">
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-user"></i> 4399用户名</label>
+                        <input type="text" class="form-input" id="createBot4399User" placeholder="4399用户名">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-lock"></i> 4399密码</label>
+                        <input type="password" class="form-input" id="createBot4399Pass" placeholder="4399密码">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-shield-alt"></i> 验证码</label>
+                        <div style="display:flex;gap:10px;align-items:flex-end;">
+                            <div class="form-group" style="flex:1;">
+                                <input type="text" class="form-input" id="createBotCaptcha" placeholder="输入验证码">
+                            </div>
+                            <div id="createBotCaptchaImg" style="width:120px;height:40px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--bg-input);overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                <span style="font-size:11px;color:var(--text-tertiary);">点击获取</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group" id="createBot4399PassGroup" style="display:none;">
-                    <label class="form-label"><i class="fas fa-lock"></i> 4399密码</label>
-                    <input type="password" class="form-input" id="createBot4399Pass" placeholder="4399密码">
-                </div>
-                <div class="form-group">
-                    <label class="form-label"><i class="fas fa-network-wired"></i> 服务器类型</label>
-                    <select class="form-input filter-select" id="createBotServerType" style="width:100%;">
-                        <option value="rental">租赁服 (Rental)</option>
-                        <option value="lobby">联机大厅 (Lobby)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label"><i class="fas fa-server"></i> 服务器号/房间号</label>
-                    <input type="text" class="form-input" id="createBotServerCode" placeholder="如: 123456">
-                </div>
-                <div class="form-group">
-                    <label class="form-label"><i class="fas fa-code-branch"></i> 游戏版本</label>
-                    <select class="form-input filter-select" id="createBotGameVersion" style="width:100%;">
-                        <option value="1.21.93">1.21.93 (最新)</option>
-                        <option value="3.9">3.9 (Community-Bot适配)</option>
-                        <option value="3.8">3.8</option>
-                        <option value="1.21.60">1.21.60</option>
-                        <option value="1.21.50">1.21.50</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label"><i class="fas fa-plug"></i> 接入点</label>
-                    <select class="form-input filter-select" id="createBotAccessPoint" style="width:100%;">
-                        <option value="neomega">NeoOmega</option>
-                        <option value="fateark">FateArk</option>
-                        <option value="community_bot">Community-Bot (3.9适配)</option>
-                        <option value="custom">自定义</option>
-                    </select>
+                <div id="createBotPoolInfo" style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:16px;">
+                    <div style="font-size:13px;color:var(--text-secondary);">
+                        <i class="fas fa-info-circle"></i> 系统将自动从Cookie池中选择一个未封禁的账号
+                    </div>
+                    <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;">
+                        账号名称由系统分配，机器人名称可自定义
+                    </div>
                 </div>
                 <div style="margin-top:20px;">
                     <button class="btn btn-primary" id="btnCreateBot" style="width:100%;">
-                        <i class="fas fa-plus"></i> 创建机器人
+                        <i class="fas fa-plus"></i> 创建账号
                     </button>
                 </div>
                 <div id="createBotHint" style="margin-top:12px;font-size:12px;color:var(--text-tertiary);text-align:center;">

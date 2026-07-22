@@ -581,6 +581,7 @@ class PocketBot:
 
         self._running = True
         self._ban_detected = False
+        self._reconnect_count = 0  # 每次启动时重置重连计数
         self._task = asyncio.create_task(self._run_loop())
         self.info.add_log("info", f"机器人 {self.name} 启动中...")
         timestamp = time.strftime("%H:%M:%S")

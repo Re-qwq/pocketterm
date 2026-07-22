@@ -1431,10 +1431,14 @@
             const statusDot = $("panelStatusDot");
             const statusText = $("panelStatusText");
             if (statusDot && statusText) {
-                if (state.panelBot && state.panelBot.status === "running") {
+                if (state.panelBot && (state.panelBot.status === "running" || state.panelBot.status === "connected" || state.panelBot.status === "spawned")) {
                     statusDot.style.background = "#22c55e";
                     statusText.textContent = "运行中";
                     statusText.style.color = "#22c55e";
+                } else if (state.panelBot && state.panelBot.status === "error") {
+                    statusDot.style.background = "#ef4444";
+                    statusText.textContent = "错误";
+                    statusText.style.color = "#ef4444";
                 } else {
                     statusDot.style.background = "var(--text-tertiary)";
                     statusText.textContent = "未启动";
@@ -1791,10 +1795,14 @@
         }
 
         // 如果有机器人，尝试发送命令
-        // 注意: 当前 API 未定义终端命令端点，此处做本地回显
-        // 如后端支持，可在此处调用 POST /bots/{bot_id}/command 等
         if (!state.currentBotId) {
             appendTerminal("没有可用的机器人，无法发送命令", "error");
+            return;
+        }
+
+        // 检查机器人是否正在运行
+        if (state.panelBot && state.panelBot.status !== "running") {
+            appendTerminal("请先启动机器人再发送命令", "warn");
             return;
         }
 
@@ -1898,15 +1906,39 @@
     /** 加载机器人配置到表单 */
     async function loadBotConfig() {
         try {
+            // 加载可用账号到下拉框
+            try {
+                const accountsRes = await api("/bots/accounts");
+                const accountSelect = $("botConfigAccount");
+                if (accountSelect && accountsRes.success && accountsRes.data) {
+                    const currentValue = state.panelBot ? state.panelBot.account_id : "";
+                    accountSelect.innerHTML = '<option value="">-- 请选择账号 --</option>';
+                    accountsRes.data.forEach((acc) => {
+                        const opt = document.createElement("option");
+                        opt.value = acc.account_id;
+                        opt.textContent = `${acc.username || acc.player_name || acc.account_id} (${acc.status})`;
+                        if (acc.account_id === currentValue) opt.selected = true;
+                        accountSelect.appendChild(opt);
+                    });
+                }
+            } catch (_) {}
             if (state.panelBot) {
                 const bot = state.panelBot;
                 $("botConfigName").value = bot.name || "";
                 $("botConfigAccount").value = bot.account_id || "";
                 $("botConfigServerCode").value = bot.server_code || "";
                 $("botConfigServerType").value = bot.server_type || "rental";
-                $("botConfigAccessPoint").value = bot.access_point || "neomega";
+                $("botConfigAccessPoint").value = bot.access_point_type || bot.access_point || "neomega";
                 const gameVersionEl = $("botConfigGameVersion");
-                if (gameVersionEl && bot.game_version) gameVersionEl.value = bot.game_version;
+                // game_version 可能在 bot.game_version 或 config JSON 中
+                let gameVersion = bot.game_version;
+                if (!gameVersion && bot.config) {
+                    try {
+                        const cfg = typeof bot.config === "string" ? JSON.parse(bot.config) : bot.config;
+                        gameVersion = cfg.game_version;
+                    } catch (_) {}
+                }
+                if (gameVersionEl && gameVersion) gameVersionEl.value = gameVersion;
                 else if (gameVersionEl) gameVersionEl.value = "1.21.93";
                 $("botConfigExtra").value = bot.extra_config
                     ? (typeof bot.extra_config === "string"
@@ -1953,7 +1985,7 @@
             server_code: serverCode,
             server_type: serverType,
             game_version,
-            access_point: accessPoint,
+            access_point_type: accessPoint,
             ...extra,
         };
 
@@ -2778,8 +2810,8 @@
         const source = $("createBotAccountSource");
         if (!source) return;
         const isPool = source.value === "pool";
-        $("createBotAccountGroup").style.display = isPool ? "none" : "block";
-        $("createBot4399PassGroup").style.display = isPool ? "none" : "block";
+        $("createBot4399Fields").style.display = isPool ? "none" : "block";
+        $("createBotPoolInfo").style.display = isPool ? "block" : "none";
     }
 
     /** 创建机器人 */
@@ -2790,23 +2822,16 @@
             return;
         }
         const accountSource = $("createBotAccountSource").value;
-        const serverType = $("createBotServerType").value;
-        const serverCode = $("createBotServerCode").value.trim();
-        const gameVersion = $("createBotGameVersion").value;
-        const accessPoint = $("createBotAccessPoint").value;
 
         const payload = {
             name: name,
-            server_type: serverType,
-            server_code: serverCode,
-            game_version: gameVersion,
-            access_point_type: accessPoint,
             account_source: accountSource,
         };
 
         if (accountSource === "new") {
             payload.username_4399 = $("createBot4399User").value.trim();
             payload.password_4399 = $("createBot4399Pass").value.trim();
+            payload.captcha_answer = $("createBotCaptcha").value.trim();
             if (!payload.username_4399 || !payload.password_4399) {
                 toastError("请填写4399账号密码");
                 return;
@@ -2824,11 +2849,11 @@
             });
 
             if (res.success) {
-                toastSuccess("机器人创建成功！");
-                // 清空表单
+                toastSuccess("账号创建成功！");
                 $("createBotName").value = "";
-                $("createBotServerCode").value = "";
-                // 跳转到机器人列表
+                $("createBot4399User").value = "";
+                $("createBot4399Pass").value = "";
+                $("createBotCaptcha").value = "";
                 switchView("bots");
                 await loadBots();
             } else {
@@ -2839,7 +2864,25 @@
         } finally {
             const btn = $("btnCreateBot");
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-plus"></i> 创建机器人';
+            btn.innerHTML = '<i class="fas fa-plus"></i> 创建账号';
+        }
+    }
+
+    /** 获取4399验证码图片 */
+    async function fetchCreateBotCaptcha() {
+        const imgBox = $("createBotCaptchaImg");
+        if (!imgBox) return;
+        try {
+            imgBox.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">加载中...</span>';
+            const res = await fetch("/api/accounts/login4399/captcha").then(r => r.json());
+            if (res.success && res.data && res.data.image) {
+                imgBox.innerHTML = `<img src="${res.data.image}" style="width:100%;height:100%;object-fit:cover;" alt="验证码">`;
+                imgBox.dataset.captchaId = res.data.captcha_id || "";
+            } else {
+                imgBox.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">点击重试</span>';
+            }
+        } catch (_) {
+            imgBox.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">点击重试</span>';
         }
     }
 
@@ -3013,6 +3056,7 @@
         // ---- 创建机器人 ----
         $("btnCreateBot").addEventListener("click", handleCreateBot);
         $("createBotAccountSource").addEventListener("change", toggleCreateBotAccountSource);
+        $("createBotCaptchaImg").addEventListener("click", fetchCreateBotCaptcha);
 
         // ---- 替换Key ----
         $("btnReplaceKey").addEventListener("click", () => {
