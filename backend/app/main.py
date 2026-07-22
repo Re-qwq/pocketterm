@@ -201,6 +201,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         logger.exception("多用户数据库初始化失败 (将继续启动)")
 
+    # 重置所有机器人状态为 stopped (服务器重启后没有机器人实际在运行)
+    try:
+        await db.conn.execute("UPDATE bot_instances SET status = 'stopped' WHERE status != 'stopped'")
+        await db.conn.commit()
+        logger.info("已重置所有机器人状态为 stopped")
+    except Exception:
+        logger.exception("重置机器人状态失败 (将继续启动)")
+
     # 3. 初始化插件管理器 (扫描 python / go / java 三个语言目录)
     try:
         infos = plugin_manager.discover_plugins()

@@ -259,7 +259,7 @@ async def list_accounts(request: Request):
 # ============================================================================
 
 class CreateBotFromPoolRequest(BaseModel):
-    name: str
+    name: str = "Bot"  # 机器人名称，默认为 Bot
     account_source: str = "pool"  # pool 或 new
     username_4399: str = ""
     password_4399: str = ""
@@ -282,6 +282,11 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
 
     if user["role"] == "user" and len(user_bots) >= 1:
         raise HTTPException(status_code=403, detail="普通用户最多创建1个机器人")
+
+    # 如果 name 为默认值，加上时间戳让名字唯一
+    bot_name = req.name
+    if bot_name == "Bot":
+        bot_name = f"Bot_{int(time.time()) % 100000}"
 
     # 获取或创建账号
     account_id = ""
@@ -320,7 +325,7 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
             await db.conn.execute(
                 "INSERT INTO accounts (account_id, username, password, player_name, status, created_at) "
                 "VALUES (?, ?, ?, ?, 'active', ?)",
-                (account_id, req.username_4399, req.password_4399, req.name, time.time())
+                (account_id, req.username_4399, req.password_4399, bot_name, time.time())
             )
             await db.conn.commit()
         except HTTPException:
@@ -348,7 +353,7 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
 
     bot_id = await db.create_bot_instance(
         panel_id=panel_id,
-        name=req.name,
+        name=bot_name,
         account_id=account_id,
         server_code="",
         server_type="rental",
@@ -359,7 +364,7 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
     # 记录日志
     await db.add_log(
         target_type="bot", target_id=bot_id,
-        level="success", message=f"机器人创建成功: {req.name}",
+        level="success", message=f"机器人创建成功: {bot_name}",
         ip=request.client.host if request.client else "",
         created_by=user["user_id"],
     )
@@ -368,7 +373,7 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
         "success": True,
         "data": {
             "bot_id": bot_id,
-            "name": req.name,
+            "name": bot_name,
             "account_id": account_id,
             "panel_id": panel_id,
         },
@@ -463,7 +468,7 @@ async def start_bot(bot_id: str, request: Request):
     if panel and panel["expire_at"] and panel["expire_at"] < now:
         raise HTTPException(status_code=403, detail="面板已到期，请续费后继续使用")
 
-    if bot["status"] == "running":
+    if bot["status"] in ("running", "starting", "connecting"):
         raise HTTPException(status_code=400, detail="机器人已在运行中")
 
     # 封号检测: 检查关联账号是否被标记为封号
@@ -492,8 +497,8 @@ async def start_bot(bot_id: str, request: Request):
     except Exception as e:
         error_msg = str(e)
 
-    # 更新状态
-    new_status = "running" if started else "error"
+    # 更新状态 - 启动时设为 starting，实际状态由 bot 运行循环同步
+    new_status = "starting" if started else "error"
     await db.update_bot_status(bot_id, new_status)
 
     await db.add_log(
@@ -518,7 +523,7 @@ async def stop_bot(bot_id: str, request: Request):
 
     bot = await _get_bot_with_access(bot_id, user, db)
 
-    if bot["status"] != "running":
+    if bot["status"] not in ("running", "starting", "connecting"):
         raise HTTPException(status_code=400, detail="机器人未在运行")
 
     try:
@@ -572,7 +577,8 @@ async def restart_bot(bot_id: str, request: Request):
     except Exception as e:
         error_msg = str(e)
 
-    await db.update_bot_status(bot_id, "running" if started else "error")
+    # 更新状态 - 重启时设为 starting，实际状态由 bot 运行循环同步
+    await db.update_bot_status(bot_id, "starting" if started else "error")
     await db.add_log(
         target_type="bot", target_id=bot_id,
         level="success" if started else "error",
@@ -599,7 +605,7 @@ async def update_bot_config(bot_id: str, req: UpdateBotConfigRequest, request: R
 
     bot = await _get_bot_with_access(bot_id, user, db)
 
-    if bot["status"] == "running":
+    if bot["status"] in ("running", "starting", "connecting"):
         raise HTTPException(status_code=400, detail="请先停止机器人再修改配置")
 
     # 合并配置
@@ -662,8 +668,8 @@ async def delete_bot(bot_id: str, request: Request):
 
     bot = await _get_bot_with_access(bot_id, user, db)
 
-    # 如果正在运行, 先停止
-    if bot["status"] == "running":
+    # 如果正在运行或启动中, 先停止
+    if bot["status"] in ("running", "starting", "connecting"):
         try:
             from app.bot.manager import bot_manager
             await bot_manager.stop_bot(bot_id)

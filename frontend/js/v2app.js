@@ -1409,43 +1409,52 @@
                 state.currentBotId = state.panelBot.bot_id || state.panelBot.id;
                 appendTerminal(`机器人已加载: ${state.panelBot.name || "未命名"}`, "success");
                 appendTerminal(`机器人状态: ${state.panelBot.status || "unknown"}`, "info");
-                // 根据机器人状态切换按钮
-                const startBtn = $("btnStartBot");
-                const stopBtn = $("btnStopBot");
-                const restartBtn = $("btnRestartBot");
-                if (state.panelBot && state.panelBot.status === "running") {
-                    startBtn.classList.add("hidden");
-                    stopBtn.classList.remove("hidden");
-                    restartBtn.classList.remove("hidden");
-                } else {
-                    startBtn.classList.remove("hidden");
-                    stopBtn.classList.add("hidden");
-                    restartBtn.classList.add("hidden");
-                }
             } else {
                 state.panelBot = null;
                 state.currentBotId = null;
                 appendTerminal('该面板尚未创建机器人，请在「设置」中配置并创建', "warn");
             }
-            // 更新面板状态指示器
-            const statusDot = $("panelStatusDot");
-            const statusText = $("panelStatusText");
-            if (statusDot && statusText) {
-                if (state.panelBot && (state.panelBot.status === "running" || state.panelBot.status === "connected" || state.panelBot.status === "spawned")) {
-                    statusDot.style.background = "#22c55e";
-                    statusText.textContent = "运行中";
-                    statusText.style.color = "#22c55e";
-                } else if (state.panelBot && state.panelBot.status === "error") {
-                    statusDot.style.background = "#ef4444";
-                    statusText.textContent = "错误";
-                    statusText.style.color = "#ef4444";
-                } else {
-                    statusDot.style.background = "var(--text-tertiary)";
-                    statusText.textContent = "未启动";
-                    statusText.style.color = "var(--text-secondary)";
-                }
-            }
+            // 更新面板机器人 UI (按钮、状态指示器)
+            updatePanelBotUI();
         } catch (_) { /* 已处理 */ }
+    }
+
+    /** 更新面板机器人 UI (按钮、状态指示器) */
+    function updatePanelBotUI() {
+        const startBtn = $("btnStartBot");
+        const stopBtn = $("btnStopBot");
+        const restartBtn = $("btnRestartBot");
+        if (state.panelBot && (state.panelBot.status === "running" || state.panelBot.status === "connected" || state.panelBot.status === "spawned" || state.panelBot.status === "starting" || state.panelBot.status === "connecting")) {
+            startBtn.classList.add("hidden");
+            stopBtn.classList.remove("hidden");
+            restartBtn.classList.remove("hidden");
+        } else {
+            startBtn.classList.remove("hidden");
+            stopBtn.classList.add("hidden");
+            restartBtn.classList.add("hidden");
+        }
+        // 更新面板状态指示器
+        const statusDot = $("panelStatusDot");
+        const statusText = $("panelStatusText");
+        if (statusDot && statusText) {
+            if (state.panelBot && (state.panelBot.status === "running" || state.panelBot.status === "connected" || state.panelBot.status === "spawned")) {
+                statusDot.style.background = "#22c55e";
+                statusText.textContent = "运行中";
+                statusText.style.color = "#22c55e";
+            } else if (state.panelBot && (state.panelBot.status === "starting" || state.panelBot.status === "connecting")) {
+                statusDot.style.background = "#f59e0b";
+                statusText.textContent = "启动中...";
+                statusText.style.color = "#f59e0b";
+            } else if (state.panelBot && state.panelBot.status === "error") {
+                statusDot.style.background = "#ef4444";
+                statusText.textContent = "错误";
+                statusText.style.color = "#ef4444";
+            } else {
+                statusDot.style.background = "var(--text-tertiary)";
+                statusText.textContent = "未启动";
+                statusText.style.color = "var(--text-tertiary)";
+            }
+        }
     }
 
     /**
@@ -1679,12 +1688,29 @@
                 // 心跳响应, 忽略
                 break;
             case "bot_status": {
-                // 机器人状态变更 - 若当前面板机器人匹配则刷新终端显示
+                // 机器人状态变更 - 直接从 WebSocket 数据更新，避免 DB 延迟导致的竞态
                 if (state.currentBotId && data.bot_id === state.currentBotId) {
                     if (data.status) {
-                        appendTerminal(`机器人状态更新: ${data.status}`, "info");
+                        // 映射内存状态到 DB 状态用于显示
+                        const statusMap = {
+                            idle: "stopped",
+                            connecting: "connecting",
+                            authenticating: "connecting",
+                            connected: "running",
+                            spawned: "running",
+                            error: "error",
+                            banned: "banned",
+                            disconnected: "stopped",
+                            kicked: "error",
+                        };
+                        const displayStatus = statusMap[data.status] || data.status;
+                        if (state.panelBot) {
+                            state.panelBot.status = displayStatus;
+                        }
+                        appendTerminal(`机器人状态更新: ${displayStatus}`, "info");
+                        // 直接更新 UI 而非重新从 API 读取
+                        updatePanelBotUI();
                     }
-                    loadPanelBot();
                 }
                 break;
             }
@@ -2816,15 +2842,9 @@
 
     /** 创建机器人 */
     async function handleCreateBot() {
-        const name = $("createBotName").value.trim();
-        if (!name) {
-            toastError("请输入机器人名称");
-            return;
-        }
         const accountSource = $("createBotAccountSource").value;
 
         const payload = {
-            name: name,
             account_source: accountSource,
         };
 
@@ -2850,7 +2870,6 @@
 
             if (res.success) {
                 toastSuccess("账号创建成功！");
-                $("createBotName").value = "";
                 $("createBot4399User").value = "";
                 $("createBot4399Pass").value = "";
                 $("createBotCaptcha").value = "";

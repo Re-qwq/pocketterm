@@ -338,6 +338,9 @@ class PocketBot:
         old_status = self.info.status
         self.info.status = status
 
+        # 同步状态到数据库
+        self._sync_status_to_db(status)
+
         timestamp = time.strftime("%H:%M:%S")
 
         # 状态 -> 图标 / 颜色 映射
@@ -375,6 +378,35 @@ class PocketBot:
             logger.info(
                 f"机器人 {self.name} 状态: {old_status.value} -> {status.value}"
             )
+
+    def _sync_status_to_db(self, status: BotStatus) -> None:
+        """异步同步状态到数据库。"""
+        status_map = {
+            BotStatus.IDLE: "stopped",
+            BotStatus.CONNECTING: "connecting",
+            BotStatus.AUTHENTICATING: "connecting",
+            BotStatus.CONNECTED: "running",
+            BotStatus.SPAWNED: "running",
+            BotStatus.ERROR: "error",
+            BotStatus.BANNED: "banned",
+            BotStatus.DISCONNECTED: "disconnected",
+        }
+        db_status = status_map.get(status)
+        if db_status is None:
+            return
+        try:
+            asyncio.create_task(self._do_db_status_update(db_status))
+        except Exception:
+            pass
+
+    async def _do_db_status_update(self, db_status: str) -> None:
+        """实际执行数据库状态更新。"""
+        try:
+            from app.database import get_db
+            db = await get_db()
+            await db.update_bot_status(self.bot_id, db_status)
+        except Exception:
+            pass
 
     def _log_op(self, icon: str, message: str, color: str = Colors.CYAN) -> None:
         """打印游戏操作日志（带图标和颜色）。
