@@ -248,13 +248,21 @@ async def logout(request: Request, response: Response):
 
 @router.get("/activity-log")
 async def activity_log(request: Request, limit: int = 200):
-    """查看用户活动日志（登录、注册、登出）。管理员权限。"""
-    from .auth import require_admin
-    admin = await require_admin(request)
+    """查看用户活动日志（登录、注册、登出）。
+
+    管理员可查看所有用户的活动日志; 普通用户只能查看自己的活动日志。
+    """
+    from .auth import require_user
+    user = await require_user(request)
     db = await get_db()
 
-    # 查询所有用户相关日志
-    logs = await db.list_logs(target_type="user", limit=limit)
+    # 权限控制: 普通用户只能查看自己的活动日志, 管理员可查看所有
+    target_id = None
+    if user["role"] == "user":
+        target_id = user["user_id"]
+
+    # 查询用户相关日志
+    logs = await db.list_logs(target_type="user", target_id=target_id, limit=limit)
 
     # 解析每条日志，提取用户名和操作类型
     result = []

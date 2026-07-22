@@ -73,13 +73,15 @@ from app.api.v2.panels import router as v2_panels_router
 from app.api.v2.bots import router as v2_bots_router
 from app.api.v2.logs import router as v2_logs_router
 from app.api.v2.system_admin import router as v2_system_admin_router
+from app.api.v2.announcements import router as v2_announcements_router
+from app.api.v2.sauth_refresh import router as v2_sauth_refresh_router
 
 
 __all__ = ["app", "lifespan"]
 
 
 #: 应用版本号
-APP_VERSION: str = "1.2"
+APP_VERSION: str = "1.5"
 
 #: 应用入口日志器
 logger = get_logger("app")
@@ -252,11 +254,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             check_expired_panels_loop,
             nv1_auto_refresh_loop,
             ban_detection_cleanup_loop,
+            sauth_auto_refresh_loop,
         )
         loop = _asyncio.get_event_loop()
         _background_tasks.append(loop.create_task(check_expired_panels_loop()))
         _background_tasks.append(loop.create_task(nv1_auto_refresh_loop()))
         _background_tasks.append(loop.create_task(ban_detection_cleanup_loop()))
+        _background_tasks.append(loop.create_task(sauth_auto_refresh_loop()))
         logger.info(f"已启动 {len(_background_tasks)} 个后台任务")
     except Exception:  # noqa: BLE001
         logger.exception("后台任务启动失败 (将继续启动)")
@@ -467,13 +471,15 @@ app.include_router(cookies_router)
 app.include_router(imports_router)
 app.include_router(settings_router)
 
-# v2 API 路由 (多用户/卡密/面板/日志/系统管理)
+# v2 API 路由 (多用户/卡密/面板/日志/系统管理/公告)
 app.include_router(v2_users_router)
 app.include_router(v2_cards_router)
 app.include_router(v2_panels_router)
 app.include_router(v2_bots_router)
 app.include_router(v2_logs_router)
 app.include_router(v2_system_admin_router)
+app.include_router(v2_announcements_router)
+app.include_router(v2_sauth_refresh_router)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,12 @@ class SetNV1KeyRequest(BaseModel):
     expires_in_days: int = Field(7, description="Key 有效期 (天), 0=永久")
 
 
+class SetNovaBuilderCredentialsRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100, description="NovaBuilder 用户名")
+    password: str = Field(..., min_length=1, max_length=200, description="NovaBuilder 密码")
+    api_key: str = Field("", max_length=8192, description="已有的 NovaBuilder API Key (可选)")
+
+
 class ReportLoginFailureRequest(BaseModel):
     account_id: str = Field(..., max_length=64, description="游戏账号 ID")
     bot_id: str = Field("", max_length=64, description="机器人实例 ID")
@@ -67,6 +73,38 @@ async def set_nv1_key(req: SetNV1KeyRequest, request: Request):
     )
 
     return {"success": True, "message": "nv1 Key 已设置"}
+
+
+@router.post("/nv1/novabuilder-credentials")
+async def set_novabuilder_credentials(req: SetNovaBuilderCredentialsRequest, request: Request):
+    """设置 NovaBuilder 用户中心凭据, 启用自动刷新模式 (管理员)。
+
+    设置后, 系统将自动登录 novabuilder.pro 获取/刷新 API Key,
+    无需管理员手动替换过期的 Key。
+    """
+    from .auth import require_admin
+    admin = await require_admin(request)
+
+    from app.auth.nv1_manager import nv1_manager
+    await nv1_manager.set_novabuilder_credentials(req.username, req.password)
+
+    # 如果提供了已有的 API Key, 直接设置
+    if req.api_key:
+        await nv1_manager.set_key(
+            req.api_key,
+            expires_at=time.time() + 7 * 86400,
+            api_token=req.api_key,
+        )
+
+    db = await get_db()
+    await db.add_log(
+        target_type="system", target_id="nv1_novabuilder",
+        level="success",
+        message=f"管理员 {admin['username']} 设置 NovaBuilder 凭据 (用户: {req.username})",
+        created_by=admin["user_id"],
+    )
+
+    return {"success": True, "message": "NovaBuilder 凭据已设置, 已启用自动刷新模式"}
 
 
 @router.post("/nv1/refresh")
@@ -277,3 +315,32 @@ async def system_stats(request: Request):
             "timestamp": time.time(),
         },
     }
+
+
+# ============================================================================
+# 接入点管理 (v2 兼容端点)
+# ============================================================================
+
+@router.get("/access-points")
+async def list_access_points_v2(request: Request):
+    """列出可用接入点 (v2 兼容)。"""
+    from .auth import require_user
+    await require_user(request)
+    from app.access_point.manager import get_manager
+    mgr = get_manager()
+    available = mgr.list_available()
+    return {"success": True, "data": {"available": available}}
+
+
+@router.post("/access-points/{name}/download")
+async def download_access_point_v2(name: str, request: Request):
+    """下载接入点二进制 (v2 兼容)。"""
+    from .auth import require_user
+    await require_user(request)
+    from app.access_point.manager import get_manager
+    mgr = get_manager()
+    try:
+        path = await mgr.download(name)
+        return {"success": True, "data": {"path": str(path)}}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

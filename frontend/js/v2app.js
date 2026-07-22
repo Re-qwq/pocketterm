@@ -116,6 +116,8 @@
         terminalHistoryIndex: -1,     // 历史浏览索引
         cardFilterType: "",           // 卡密筛选 - 类型
         cardFilterStatus: "",         // 卡密筛选 - 状态
+        cardShowRevoked: false,       // 卡密列表 - 是否显示已撤销卡密 (默认 false)
+        panelScope: "mine",           // 面板列表范围 (mine/all), 仅管理员可切换为 all
         logFilterLevel: "",           // 日志筛选 - 级别
         // -- WebSocket 连接状态 --
         ws: null,                     // WebSocket 实例
@@ -140,7 +142,7 @@
      * @returns {Promise<object|string>} 解析后的 JSON 或文本
      */
     async function api(path, options = {}) {
-        const url = path.startsWith("http") ? path : API_BASE + path;
+        const url = path.startsWith("http") ? path : (path.startsWith("/api/") ? path : API_BASE + path);
 
         // 构建请求头
         const headers = {};
@@ -508,7 +510,7 @@
      * @returns {Promise<boolean>} 是否已登录
      */
     async function checkSession() {
-        if (!state.token) return false;
+        // 即使没有 token, 也尝试通过 cookie 检查会话
         try {
             const res = await api("/auth/me");
             if (res.success && res.data) {
@@ -752,6 +754,18 @@
         $("adminDivider").style.display = isAdmin ? "" : "none";
         $("adminSection").style.display = isAdmin ? "" : "none";
         $("quickCards").style.display = isAdmin ? "" : "none";
+        const annCreateBtn = $("annCreateBtn");
+        if (annCreateBtn) annCreateBtn.style.display = isAdmin ? "" : "none";
+        // 面板范围切换标签 (我的面板/全部面板) 仅管理员可见
+        const panelScopeTabs = $("panelScopeTabs");
+        if (panelScopeTabs) panelScopeTabs.style.display = isAdmin ? "flex" : "none";
+        // 普通用户强制使用 "我的面板" 范围, 并重置高亮
+        if (!isAdmin) {
+            state.panelScope = "mine";
+            $$("[data-panel-scope]").forEach((t) => {
+                t.classList.toggle("active", t.dataset.panelScope === "mine");
+            });
+        }
     }
 
     /* ======================================================================
@@ -805,6 +819,12 @@
                 break;
             case "admin-system":
                 loadSystemAdmin();
+                break;
+            case "announcements":
+                loadAnnouncements();
+                break;
+            case "admin-ann-logs":
+                loadAnnouncementLogs();
                 break;
         }
     }
@@ -1009,6 +1029,7 @@
     window.togglePlugin = togglePlugin;
     window.reloadPlugin = reloadPlugin;
     window.switchView = switchView;
+    window.deleteComment = deleteComment;
 
     /**
      * 切换控制台 Tab
@@ -1196,7 +1217,9 @@
     async function loadPanels() {
         const grid = $("panelsGrid");
         try {
-            const res = await api("/panels");
+            // 管理员可按 state.panelScope 切换 "我的面板/全部面板"; 普通用户强制使用 mine
+            const scope = isAdmin() ? (state.panelScope || "mine") : "mine";
+            const res = await api(`/panels?scope=${encodeURIComponent(scope)}`);
             if (res.success) {
                 state.panels = res.data || [];
                 renderPanels(state.panels);
@@ -1384,12 +1407,12 @@
                 const check = checkRes.value.data;
                 const remaining = check.remaining_seconds != null
                     ? formatRemaining(check.remaining_seconds)
-                    : "未知";
+                    : "永久";
                 // 将面板状态保存到 state, 与 WebSocket 状态组合显示在 consoleInfo
                 state.panelInfoText = `状态: ${check.status || "未知"} | 剩余: ${remaining}`;
                 refreshConsoleInfo();
                 appendTerminal(`面板状态: ${check.status || "未知"}`, "info");
-                appendTerminal(`到期时间: ${formatTime(check.expire_at)}`, "info");
+                appendTerminal(`到期时间: ${check.expire_at ? formatTime(check.expire_at) : "永久"}`, "info");
                 appendTerminal(`剩余时间: ${remaining}`, "info");
                 if (check.remaining_seconds != null && check.remaining_seconds <= 0) {
                     appendTerminal("警告: 面板已过期，请续费后使用", "warn");
@@ -2015,7 +2038,7 @@
             server_type: serverType,
             game_version,
             access_point_type: accessPoint,
-            ...extra,
+            config: extra,
         };
 
         try {
@@ -2061,7 +2084,7 @@
     /** 加载接入点状态 */
     async function loadAccessPointStatus() {
         try {
-            const res = await api("/access-points");
+            const res = await api("/system/access-points");
             if (!res.success || !res.data) return;
             const aps = res.data.available || [];
             aps.forEach((ap) => {
@@ -2099,7 +2122,7 @@
             statusEl.innerHTML = '状态: <span style="color:#f59e0b;">正在下载...</span>';
         }
         try {
-            const res = await api(`/access-points/${name}/download`, { method: "POST" });
+            const res = await api(`/system/access-points/${name}/download`, { method: "POST" });
             if (res.success) {
                 toastSuccess(`${name} 下载成功`);
                 if (statusEl) {
@@ -2246,6 +2269,8 @@
             const params = new URLSearchParams();
             if (state.cardFilterType) params.set("key_type", state.cardFilterType);
             if (state.cardFilterStatus) params.set("status", state.cardFilterStatus);
+            // 默认不返回已撤销卡密 (include_revoked=false), 勾选"显示已撤销"后才返回
+            params.set("include_revoked", state.cardShowRevoked ? "true" : "false");
             const query = params.toString() ? `?${params.toString()}` : "";
             const res = await api(`/cards${query}`);
             if (res.success) {
@@ -2906,9 +2931,19 @@
     function toggleCreateBotAccountSource() {
         const source = $("createBotAccountSource");
         if (!source) return;
-        const isPool = source.value === "pool";
-        $("createBot4399Fields").style.display = isPool ? "none" : "block";
-        $("createBotPoolInfo").style.display = isPool ? "block" : "none";
+        const val = source.value;
+        $("createBot4399Fields").style.display = val === "new" ? "block" : "none";
+        $("createBotPoolInfo").style.display = val === "pool" ? "block" : "none";
+        $("createBotManualFields").style.display = val === "manual" ? "block" : "none";
+    }
+
+    /** 切换手动输入凭证的认证类型 */
+    function toggleManualAuthType() {
+        const checked = document.querySelector('input[name="manualAuthType"]:checked');
+        if (!checked) return;
+        const is4399 = checked.value === "4399";
+        $("manual4399Fields").style.display = is4399 ? "block" : "none";
+        $("manualCookieFields").style.display = is4399 ? "none" : "block";
     }
 
     /** 创建机器人 */
@@ -2920,11 +2955,27 @@
         };
 
         if (accountSource === "new") {
-            payload.username_4399 = $("createBot4399User").value.trim();
-            payload.password_4399 = $("createBot4399Pass").value.trim();
-            payload.captcha_answer = $("createBotCaptcha").value.trim();
-            if (!payload.username_4399 || !payload.password_4399) {
-                toastError("请填写4399账号密码");
+            // 自动注册新4399账号 - 不需要服务器编号, 后续在面板配置中填写
+            payload.server_code = $("createBotNewServerCode")?.value.trim() || "";
+        } else if (accountSource === "manual") {
+            payload.server_code = $("createBotServerCode").value.trim();
+            const authType = document.querySelector('input[name="manualAuthType"]:checked');
+            if (authType && authType.value === "4399") {
+                payload.username_4399 = $("createBotManualUser").value.trim();
+                payload.password_4399 = $("createBotManualPass").value.trim();
+                if (!payload.username_4399 || !payload.password_4399) {
+                    toastError("请填写4399账号密码");
+                    return;
+                }
+            } else {
+                payload.sauth_json = $("createBotSauthJson").value.trim();
+                if (!payload.sauth_json) {
+                    toastError("请粘贴 sauth_json 或 Cookie");
+                    return;
+                }
+            }
+            if (!payload.server_code) {
+                toastError("请填写服务器编号");
                 return;
             }
         }
@@ -2941,9 +2992,11 @@
 
             if (res.success) {
                 toastSuccess("账号创建成功！");
-                $("createBot4399User").value = "";
-                $("createBot4399Pass").value = "";
-                $("createBotCaptcha").value = "";
+                $("createBotNewServerCode") && ($("createBotNewServerCode").value = "");
+                $("createBotManualUser") && ($("createBotManualUser").value = "");
+                $("createBotManualPass") && ($("createBotManualPass").value = "");
+                $("createBotSauthJson") && ($("createBotSauthJson").value = "");
+                $("createBotServerCode") && ($("createBotServerCode").value = "");
                 switchView("bots");
                 await loadBots();
             } else {
@@ -2966,12 +3019,16 @@
             imgBox.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">加载中...</span>';
             const res = await fetch("/api/accounts/login4399/captcha").then(r => r.json());
             if (res.success && res.data && res.data.image) {
-                imgBox.innerHTML = `<img src="${res.data.image}" style="width:100%;height:100%;object-fit:cover;" alt="验证码">`;
-                imgBox.dataset.captchaId = res.data.captcha_id || "";
+                // 后端返回纯 base64, 需要添加 data URL 前缀
+                const imgSrc = res.data.image.startsWith("data:")
+                    ? res.data.image
+                    : `data:image/jpeg;base64,${res.data.image}`;
+                imgBox.innerHTML = `<img src="${imgSrc}" style="width:100%;height:100%;object-fit:cover;" alt="验证码">`;
+                imgBox.dataset.captchaId = res.data.id || res.data.captcha_id || "";
             } else {
                 imgBox.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">点击重试</span>';
             }
-        } catch (_) {
+        } catch (e) {
             imgBox.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary);">点击重试</span>';
         }
     }
@@ -3123,6 +3180,16 @@
         // ---- 面板列表 ----
         $("refreshPanels").addEventListener("click", loadPanels);
         $("btnCreatePanel").addEventListener("click", openCreatePanelModal);
+        // 面板范围切换 (我的面板/全部面板) - 仅管理员可见
+        $$("[data-panel-scope]").forEach((tab) => {
+            tab.addEventListener("click", () => {
+                const scope = tab.dataset.panelScope;
+                if (!isAdmin() || scope === state.panelScope) return;
+                state.panelScope = scope;
+                $$("[data-panel-scope]").forEach((t) => t.classList.toggle("active", t === tab));
+                loadPanels();
+            });
+        });
 
         // ---- 面板详情 ----
         $("backToPanels").addEventListener("click", () => switchView("panels"));
@@ -3146,7 +3213,9 @@
         // ---- 创建机器人 ----
         $("btnCreateBot").addEventListener("click", handleCreateBot);
         $("createBotAccountSource").addEventListener("change", toggleCreateBotAccountSource);
-        $("createBotCaptchaImg").addEventListener("click", fetchCreateBotCaptcha);
+        $("createBotCaptchaImg") && $("createBotCaptchaImg").addEventListener("click", fetchCreateBotCaptcha);
+        $("manualAuth4399") && $("manualAuth4399").addEventListener("change", toggleManualAuthType);
+        $("manualAuthCookie") && $("manualAuthCookie").addEventListener("change", toggleManualAuthType);
 
         // ---- 替换Key ----
         $("btnReplaceKey").addEventListener("click", () => {
@@ -3223,6 +3292,11 @@
             state.cardFilterStatus = e.target.value;
             loadCards();
         });
+        // 显示/隐藏已撤销卡密
+        $("cardShowRevoked").addEventListener("change", (e) => {
+            state.cardShowRevoked = e.target.checked;
+            loadCards();
+        });
         $("refreshCardLogs").addEventListener("click", loadCardCreationLogs);
 
         // ---- 用户管理 ----
@@ -3239,6 +3313,12 @@
         // ---- 系统管理 ----
         $("refreshSystemAdmin").addEventListener("click", loadSystemAdmin);
         $("nv1RefreshBtn").addEventListener("click", handleNV1Refresh);
+        $("nv1SetKeyBtn").addEventListener("click", handleNV1SetKey);
+        $("nv1SetNbBtn").addEventListener("click", handleNV1SetNovaBuilder);
+
+        // ---- 公告 ----
+        $("annCreateBtn").addEventListener("click", () => openModal("modalCreateAnnouncement"));
+        $("createAnnouncementSubmit").addEventListener("click", handleCreateAnnouncement);
 
         // ---- 模态框 ----
         // 关闭按钮 (data-modal-close)
@@ -3336,6 +3416,389 @@
 
         // ---- 欢迎时间定时刷新 ----
         setInterval(updateWelcomeTime, 1000);
+    }
+
+    /* ======================================================================
+       20b. NV1 Key 管理 & 公告功能
+       ====================================================================== */
+
+    /** 设置 NV1 SAuth Key (管理员) */
+    async function handleNV1SetKey() {
+        const key = $("nv1KeyInput")?.value.trim();
+        const apiToken = $("nv1ApiTokenInput")?.value.trim();
+        const expiresInDays = parseInt($("nv1ExpiresInput")?.value || "7");
+
+        if (!key) {
+            toastError("请输入 SAuth Key");
+            return;
+        }
+
+        try {
+            const res = await api("/system/nv1/config", {
+                method: "POST",
+                body: { key, api_token: apiToken, expires_in_days: expiresInDays },
+            });
+            if (res.success) {
+                toastSuccess("Key 设置成功");
+                $("nv1KeyInput").value = "";
+                $("nv1ApiTokenInput").value = "";
+                await loadNV1Status();
+            } else {
+                toastError("设置失败: " + (res.detail || res.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("设置失败: " + e.message);
+        }
+    }
+
+    /** 设置 NovaBuilder 凭据, 启用自动刷新 (管理员) */
+    async function handleNV1SetNovaBuilder() {
+        const username = $("nv1NbUsername")?.value.trim();
+        const password = $("nv1NbPassword")?.value.trim();
+        const apiKey = $("nv1NbApiKey")?.value.trim();
+
+        if (!username || !password) {
+            toastError("请输入 NovaBuilder 用户名和密码");
+            return;
+        }
+
+        try {
+            const res = await api("/system/nv1/novabuilder-credentials", {
+                method: "POST",
+                body: { username, password, api_key: apiKey },
+            });
+            if (res.success) {
+                toastSuccess("NovaBuilder 自动刷新已启用");
+                await loadNV1Status();
+            } else {
+                toastError("设置失败: " + (res.detail || res.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("设置失败: " + e.message);
+        }
+    }
+
+    /** 格式化时间 */
+    function fmtTime(ts) {
+        if (!ts) return "-";
+        const d = new Date(ts * 1000);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    }
+
+    /** 判断当前用户是否为管理员 */
+    function isAdmin() {
+        const role = state.currentUser ? state.currentUser.role : "user";
+        return role === "admin" || role === "superadmin";
+    }
+
+    /** 加载公告列表 */
+    async function loadAnnouncements() {
+        const container = $("annList");
+        if (!container) return;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-bullhorn"></i><p style="font-size:13px;">加载中...</p></div>`;
+        try {
+            const res = await api("/announcements");
+            if (res.success && res.data) {
+                if (res.data.length === 0) {
+                    container.innerHTML = `<div class="empty-state"><i class="fas fa-bullhorn"></i><h3>暂无公告</h3><p style="font-size:13px;">${isAdmin() ? "点击右上角发布按钮创建公告" : "目前没有公告"}</p></div>`;
+                    return;
+                }
+                // 置顶公告排到最前 (保留后端返回顺序作为次要排序)
+                const sorted = [...res.data].sort((a, b) => {
+                    const ap = isAnnPinned(a) ? 1 : 0;
+                    const bp = isAnnPinned(b) ? 1 : 0;
+                    return bp - ap;
+                });
+                container.innerHTML = sorted.map(ann => renderAnnouncementCard(ann)).join("");
+                // 绑定事件
+                sorted.forEach(ann => {
+                    const likeBtn = document.querySelector(`[data-ann-like="${ann.announcement_id}"]`);
+                    const dislikeBtn = document.querySelector(`[data-ann-dislike="${ann.announcement_id}"]`);
+                    if (likeBtn) likeBtn.addEventListener("click", () => toggleLike(ann.announcement_id));
+                    if (dislikeBtn) dislikeBtn.addEventListener("click", () => toggleDislike(ann.announcement_id));
+                    const delBtn = document.querySelector(`[data-ann-delete="${ann.announcement_id}"]`);
+                    if (delBtn) delBtn.addEventListener("click", () => deleteAnnouncement(ann.announcement_id));
+                    // 置顶/取消置顶按钮 (仅管理员)
+                    const pinBtn = document.querySelector(`[data-ann-pin="${ann.announcement_id}"]`);
+                    if (pinBtn) pinBtn.addEventListener("click", () => togglePinAnnouncement(ann.announcement_id));
+                    const commentToggle = document.querySelector(`[data-ann-comments-toggle="${ann.announcement_id}"]`);
+                    if (commentToggle) commentToggle.addEventListener("click", () => toggleComments(ann.announcement_id));
+                    const commentInput = document.querySelector(`[data-ann-comment-input="${ann.announcement_id}"]`);
+                    const commentBtn = document.querySelector(`[data-ann-comment-btn="${ann.announcement_id}"]`);
+                    if (commentBtn) commentBtn.addEventListener("click", () => {
+                        const val = commentInput?.value.trim();
+                        if (val) addComment(ann.announcement_id, val);
+                    });
+                    if (commentInput) commentInput.addEventListener("keydown", (e) => {
+                        if (e.key === "Enter") {
+                            const val = commentInput.value.trim();
+                            if (val) addComment(ann.announcement_id, val);
+                        }
+                    });
+                });
+            }
+        } catch (e) {
+            container.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-circle" style="color:var(--color-danger);"></i><p style="font-size:13px;">加载失败: ${e.message}</p></div>`;
+        }
+    }
+
+    /** 判断公告是否已置顶 (兼容 is_pinned / pinned 两种字段) */
+    function isAnnPinned(ann) {
+        return !!(ann && (ann.is_pinned || ann.pinned));
+    }
+
+    /** 渲染单个公告卡片 */
+    function renderAnnouncementCard(ann) {
+        const liked = ann.liked || false;
+        const disliked = ann.disliked || false;
+        const likeCount = ann.like_count || 0;
+        const dislikeCount = ann.dislike_count || 0;
+        const canManage = isAdmin();
+        const canDelete = canManage;
+        const pinned = isAnnPinned(ann);
+
+        return `
+        <div class="ann-card${pinned ? ' pinned' : ''}">
+            <div class="ann-header">
+                <div>
+                    <div class="ann-title">${pinned ? `<span class="ann-pin-badge">📌 置顶</span>` : ""}${escapeHtml(ann.title)}</div>
+                    <div class="ann-meta">发布者: ${escapeHtml(ann.created_by_username)} &middot; ${fmtTime(ann.created_at)}</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;">
+                    ${canManage ? `<span class="ann-pin-btn${pinned ? ' active' : ''}" data-ann-pin="${ann.announcement_id}" title="${pinned ? '取消置顶' : '置顶'}"><i class="fas fa-thumbtack"></i> ${pinned ? '取消置顶' : '置顶'}</span>` : ""}
+                    ${canDelete ? `<span class="ann-delete-btn" data-ann-delete="${ann.announcement_id}"><i class="fas fa-trash"></i> 删除</span>` : ""}
+                </div>
+            </div>
+            <div class="ann-content">${escapeHtml(ann.content)}</div>
+            <div class="ann-actions">
+                <span class="ann-reaction ${liked ? 'active-like' : ''}" data-ann-like="${ann.announcement_id}">
+                    <i class="fas fa-thumbs-up"></i> <span>${likeCount}</span>
+                </span>
+                <span class="ann-reaction ${disliked ? 'active-dislike' : ''}" data-ann-dislike="${ann.announcement_id}">
+                    <i class="fas fa-thumbs-down"></i> <span>${dislikeCount}</span>
+                </span>
+            </div>
+            <div class="ann-comments" id="ann-comments-${ann.announcement_id}" style="display:none;">
+                <div id="ann-comments-list-${ann.announcement_id}"></div>
+                <div class="ann-comment-input">
+                    <input type="text" class="form-input" placeholder="写评论..." data-ann-comment-input="${ann.announcement_id}">
+                    <button class="btn btn-primary btn-sm" data-ann-comment-btn="${ann.announcement_id}"><i class="fas fa-paper-plane"></i></button>
+                </div>
+            </div>
+            <div style="margin-top:8px;">
+                <span class="ann-comments-toggle" data-ann-comments-toggle="${ann.announcement_id}">查看评论</span>
+            </div>
+        </div>`;
+    }
+
+    /** 转义HTML */
+    function escapeHtml(str) {
+        if (!str) return "";
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    /** 切换评论显示 */
+    async function toggleComments(annId) {
+        const container = $(`ann-comments-${annId}`);
+        if (!container) return;
+        if (container.style.display === "none") {
+            container.style.display = "block";
+            await loadComments(annId);
+            const toggle = document.querySelector(`[data-ann-comments-toggle="${annId}"]`);
+            if (toggle) toggle.textContent = "收起评论";
+        } else {
+            container.style.display = "none";
+            const toggle = document.querySelector(`[data-ann-comments-toggle="${annId}"]`);
+            if (toggle) toggle.textContent = "查看评论";
+        }
+    }
+
+    /** 加载评论 */
+    async function loadComments(annId) {
+        const listEl = $(`ann-comments-list-${annId}`);
+        if (!listEl) return;
+        try {
+            const res = await api(`/announcements/${annId}/comments`);
+            if (res.success && res.data) {
+                const canDeleteAny = isAdmin();
+                listEl.innerHTML = res.data.map(c => `
+                    <div class="ann-comment">
+                        <div class="ann-comment-header">
+                            <span class="ann-comment-user">${escapeHtml(c.username)}</span>
+                            <span>
+                                <span class="ann-comment-time">${fmtTime(c.created_at)}</span>
+                                ${(canDeleteAny || c.user_id === state.currentUser?.user_id) ? `<span class="ann-comment-delete" onclick="deleteComment('${annId}','${c.comment_id}')">删除</span>` : ""}
+                            </span>
+                        </div>
+                        <div class="ann-comment-content">${escapeHtml(c.content)}</div>
+                    </div>
+                `).join("") || `<p style="font-size:12px;color:var(--text-tertiary);padding:8px 0;">暂无评论</p>`;
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    /** 创建公告 */
+    async function handleCreateAnnouncement() {
+        const title = $("annTitle")?.value.trim();
+        const content = $("annContent")?.value.trim();
+        if (!title || !content) {
+            toastError("请填写标题和内容");
+            return;
+        }
+        try {
+            const res = await api("/announcements", {
+                method: "POST",
+                body: { title, content },
+            });
+            if (res.success) {
+                toastSuccess("公告发布成功");
+                closeModal("modalCreateAnnouncement");
+                $("annTitle").value = "";
+                $("annContent").value = "";
+                await loadAnnouncements();
+            } else {
+                toastError("发布失败: " + (res.detail || res.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("发布失败: " + e.message);
+        }
+    }
+
+    /** 删除公告 */
+    async function deleteAnnouncement(annId) {
+        if (!confirm("确定要删除这条公告吗？所有评论和点赞也将被删除。")) return;
+        try {
+            const res = await api(`/announcements/${annId}`, { method: "DELETE" });
+            if (res.success) {
+                toastSuccess("公告已删除");
+                await loadAnnouncements();
+            } else {
+                toastError("删除失败: " + (res.detail || res.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("删除失败: " + e.message);
+        }
+    }
+
+    /** 置顶/取消置顶公告 (管理员, 切换式) */
+    async function togglePinAnnouncement(annId) {
+        try {
+            const res = await api(`/announcements/${annId}/pin`, { method: "PUT" });
+            if (res.success) {
+                toastSuccess(res.message || "操作成功");
+                await loadAnnouncements();
+            } else {
+                toastError("操作失败: " + (res.detail || res.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("操作失败: " + e.message);
+        }
+    }
+
+    /** 添加评论 */
+    async function addComment(annId, content) {
+        try {
+            const res = await api(`/announcements/${annId}/comments`, {
+                method: "POST",
+                body: { content },
+            });
+            if (res.success) {
+                const input = document.querySelector(`[data-ann-comment-input="${annId}"]`);
+                if (input) input.value = "";
+                await loadComments(annId);
+            } else {
+                toastError("评论失败: " + (res.detail || res.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("评论失败: " + e.message);
+        }
+    }
+
+    /** 删除评论 */
+    async function deleteComment(annId, commentId) {
+        try {
+            const res = await api(`/announcements/${annId}/comments/${commentId}`, { method: "DELETE" });
+            if (res.success) {
+                toastSuccess("评论已删除");
+                await loadComments(annId);
+            } else {
+                toastError("删除失败: " + (res.detail || res.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("删除失败: " + e.message);
+        }
+    }
+
+    /** 点赞 */
+    async function toggleLike(annId) {
+        try {
+            const res = await api(`/announcements/${annId}/like`, { method: "POST" });
+            if (res.success) {
+                await loadAnnouncements();
+                // 展开评论区如果之前展开了
+                const container = $(`ann-comments-${annId}`);
+                if (container && container.style.display !== "none") {
+                    await loadComments(annId);
+                }
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    /** 点差评 */
+    async function toggleDislike(annId) {
+        try {
+            const res = await api(`/announcements/${annId}/dislike`, { method: "POST" });
+            if (res.success) {
+                await loadAnnouncements();
+                const container = $(`ann-comments-${annId}`);
+                if (container && container.style.display !== "none") {
+                    await loadComments(annId);
+                }
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    /** 加载公告活动日志 (管理员) */
+    async function loadAnnouncementLogs() {
+        const container = $("annLogsList");
+        if (!container) return;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-list"></i><p style="font-size:13px;">加载中...</p></div>`;
+        try {
+            const res = await api("/announcements/logs");
+            if (res.success && res.data) {
+                if (res.data.length === 0) {
+                    container.innerHTML = `<div class="empty-state"><i class="fas fa-list"></i><h3>暂无记录</h3><p style="font-size:13px;">用户点赞、差评、评论等记录将显示在这里</p></div>`;
+                    return;
+                }
+                container.innerHTML = res.data.map(log => {
+                    let iconClass = "", iconHtml = "", actionText = "";
+                    if (log.type === "like") {
+                        iconClass = "like"; iconHtml = '<i class="fas fa-thumbs-up"></i>';
+                        actionText = `赞了公告 <strong>${escapeHtml(log.announcement_title || log.announcement_id)}</strong>`;
+                    } else if (log.type === "dislike") {
+                        iconClass = "dislike"; iconHtml = '<i class="fas fa-thumbs-down"></i>';
+                        actionText = `差评了公告 <strong>${escapeHtml(log.announcement_title || log.announcement_id)}</strong>`;
+                    } else if (log.type === "comment") {
+                        iconClass = "comment"; iconHtml = '<i class="fas fa-comment"></i>';
+                        actionText = `评论了公告 <strong>${escapeHtml(log.announcement_title || log.announcement_id)}</strong>: "${escapeHtml(log.content || '')}"`;
+                    } else if (log.type === "create") {
+                        iconClass = "create"; iconHtml = '<i class="fas fa-plus"></i>';
+                        actionText = `发布了公告 <strong>${escapeHtml(log.announcement_title || log.announcement_id)}</strong>`;
+                    }
+                    return `
+                    <div class="ann-log-item">
+                        <div class="ann-log-icon ${iconClass}">${iconHtml}</div>
+                        <div style="flex:1;">
+                            <span style="font-weight:600;">${escapeHtml(log.username)}</span>
+                            <span style="color:var(--text-secondary);"> ${actionText}</span>
+                        </div>
+                        <span style="font-size:11px;color:var(--text-tertiary);">${fmtTime(log.created_at)}</span>
+                    </div>`;
+                }).join("");
+            }
+        } catch (e) {
+            container.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-circle" style="color:var(--color-danger);"></i><p style="font-size:13px;">加载失败: ${e.message}</p></div>`;
+        }
     }
 
     /* ======================================================================

@@ -1,31 +1,55 @@
+# =============================================================================
 # Fly.io 配置文件
 # 文档: https://fly.io/docs/reference/configuration/
+# =============================================================================
+# 部署步骤:
+#   1. flyctl launch --no-config
+#   2. flyctl volumes create pocketterm_data --region nrt
+#   3. flyctl secrets set POCKETTERM_JWT_SECRET="<your-secret>"
+#   4. flyctl secrets set POCKETTERM_CORS_ORIGINS="https://pocketterm.fly.dev"
+#   5. flyctl deploy
+# =============================================================================
 
 app = "pocketterm"
-primary_region = "nrt"  # 东京区域 (亚洲最近)
+primary_region = "nrt"  # 东京区域 (距离中国最近)
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
-  POCKETTERM_ENV = "production"
+  PYTHONUNBUFFERED = "1"
+  PORT = "8000"
   # 以下密钥请通过 fly secrets set 命令设置, 不要写在这里
-  # POCKETTERM_JWT_SECRET = "..."   (fly secrets set POCKETTERM_JWT_SECRET=xxx)
+  # POCKETTERM_JWT_SECRET = "..."        (fly secrets set POCKETTERM_JWT_SECRET=xxx)
   # POCKETTERM_CORS_ORIGINS = "https://pocketterm.fly.dev"
 
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = true
+  # 不自动停止机器, 保持运行 (避免冷启动延迟)
+  auto_stop_machines = false
   auto_start_machines = true
+  # 最少保持 0 台机器运行 (配合 auto_stop_machines=false 实际保持 1 台)
   min_machines_running = 0
 
-# 持久化卷: SQLite 数据库存储
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/"
+
+# 持久化卷: SQLite 数据库及配置文件存储
+# 部署前需先创建卷: flyctl volumes create pocketterm_data --region nrt
 [mounts]
   source = "pocketterm_data"
   destination = "/app/backend/data"
 
-# 资源配置 (免费档)
+# 资源配置 (免费档: shared-cpu-1x, 512MB 内存)
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "512mb"
+
+# 自动扩缩容: 最少 0 台, 最多 1 台
+# 通过 flyctl scale count 配置机器数量
+# flyctl scale count 1 --max 1

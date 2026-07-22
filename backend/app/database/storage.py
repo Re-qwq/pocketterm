@@ -166,6 +166,68 @@ class Database:
                     metadata        TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
+
+                -- 公告表
+                CREATE TABLE IF NOT EXISTS announcements (
+                    announcement_id      TEXT PRIMARY KEY,
+                    title                TEXT NOT NULL,
+                    content              TEXT NOT NULL,
+                    created_by           TEXT NOT NULL,
+                    created_by_username  TEXT NOT NULL,
+                    created_at           REAL NOT NULL,
+                    updated_at           REAL,
+                    pinned               INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements(created_at);
+
+                -- 公告评论表
+                CREATE TABLE IF NOT EXISTS announcement_comments (
+                    comment_id      TEXT PRIMARY KEY,
+                    announcement_id TEXT NOT NULL,
+                    user_id         TEXT NOT NULL,
+                    username        TEXT NOT NULL,
+                    content         TEXT NOT NULL,
+                    created_at      REAL NOT NULL,
+                    FOREIGN KEY (announcement_id) REFERENCES announcements(announcement_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_ann_comments_ann ON announcement_comments(announcement_id);
+                CREATE INDEX IF NOT EXISTS idx_ann_comments_user ON announcement_comments(user_id);
+
+                -- 公告反应表 (点赞 / 点踩)
+                CREATE TABLE IF NOT EXISTS announcement_reactions (
+                    reaction_id     TEXT PRIMARY KEY,
+                    announcement_id TEXT NOT NULL,
+                    user_id         TEXT NOT NULL,
+                    reaction_type   TEXT NOT NULL,  -- 'like' or 'dislike'
+                    created_at      REAL NOT NULL,
+                    UNIQUE(announcement_id, user_id),  -- 每个用户对每条公告只能有一个反应
+                    FOREIGN KEY (announcement_id) REFERENCES announcements(announcement_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_ann_reactions_ann ON announcement_reactions(announcement_id);
+                CREATE INDEX IF NOT EXISTS idx_ann_reactions_user ON announcement_reactions(user_id);
+
+                -- 4399 账号池表 (sauth_json 自动刷新)
+                CREATE TABLE IF NOT EXISTS sauth_accounts (
+                    id              TEXT PRIMARY KEY,
+                    username        TEXT NOT NULL UNIQUE,
+                    password        TEXT NOT NULL,
+                    uid             TEXT NOT NULL DEFAULT '',
+                    status          TEXT NOT NULL DEFAULT 'active',
+                    last_refresh_at REAL,
+                    sauth_json      TEXT NOT NULL DEFAULT '',
+                    created_at      REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sauth_accounts_status ON sauth_accounts(status);
+            """)
+            await self._conn.commit()
+
+            # -- 系统设置表 (持久化 NovaBuilder 凭据等) --
+            await self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS system_settings (
+                    key         TEXT PRIMARY KEY,
+                    value       TEXT NOT NULL,
+                    updated_at  REAL NOT NULL
+                );
             """)
             await self._conn.commit()
 
@@ -174,6 +236,8 @@ class Database:
             # 手动检查并执行 ALTER TABLE。SQLite 没有直接的 "ADD COLUMN IF
             # NOT EXISTS"，这里通过 pragma table_info 检查列是否存在。
             await self._migrate_users_table()
+            await self._migrate_announcements_table()
+            await self._migrate_sauth_accounts_table()
 
             self._initialized = True
             logger.info("数据库初始化完成: %s", self._db_path)
@@ -201,6 +265,47 @@ class Database:
             )
             await self.conn.commit()
             logger.info("users 表迁移: 已添加 must_change_password 列")
+
+    async def _migrate_announcements_table(self) -> None:
+        """执行 announcements 表的增量迁移: 补充 pinned 列。
+
+        旧版数据库不存在该列时通过 ``ALTER TABLE`` 补充, 默认值为 0 (未置顶)。
+        已存在则跳过 (通过 try/except 捕获 "duplicate column" 错误)。
+        """
+        try:
+            await self.conn.execute(
+                "ALTER TABLE announcements ADD COLUMN pinned INTEGER DEFAULT 0"
+            )
+            await self.conn.commit()
+            logger.info("announcements 表迁移: 已添加 pinned 列")
+        except aiosqlite.OperationalError as e:
+            # 列已存在时 SQLite 抛出 "duplicate column name: pinned"
+            logger.debug("announcements 表: pinned 列已存在, 跳过迁移 (%s)", e)
+
+    async def _migrate_sauth_accounts_table(self) -> None:
+        """执行 sauth_accounts 表迁移: 确保表存在。
+
+        旧版数据库不存在该表时通过 ``CREATE TABLE IF NOT EXISTS`` 创建。
+        表结构与 :meth:`init_db` 中的定义一致, 已存在则跳过。
+        """
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS sauth_accounts (
+                id              TEXT PRIMARY KEY,
+                username        TEXT NOT NULL UNIQUE,
+                password        TEXT NOT NULL,
+                uid             TEXT NOT NULL DEFAULT '',
+                status          TEXT NOT NULL DEFAULT 'active',
+                last_refresh_at REAL,
+                sauth_json      TEXT NOT NULL DEFAULT '',
+                created_at      REAL NOT NULL
+            );
+        """)
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sauth_accounts_status "
+            "ON sauth_accounts(status)"
+        )
+        await self.conn.commit()
+        logger.debug("sauth_accounts 表迁移检查完成")
 
     @property
     def conn(self) -> aiosqlite.Connection:
@@ -584,6 +689,92 @@ class Database:
         await self.conn.commit()
 
     # ========================================================================
+    # 4399 账号池管理 (sauth_json 自动刷新)
+    # ========================================================================
+
+    async def add_sauth_account(
+        self, account_id: str, username: str, password: str
+    ) -> None:
+        """添加一个 4399 账号到 sauth_accounts 表。"""
+        await self.conn.execute(
+            """INSERT INTO sauth_accounts
+               (id, username, password, uid, status, last_refresh_at,
+                sauth_json, created_at)
+               VALUES (?, ?, ?, '', 'active', NULL, '', ?)""",
+            (account_id, username, password, _now()),
+        )
+        await self.conn.commit()
+
+    async def get_sauth_account(self, account_id: str) -> Optional[aiosqlite.Row]:
+        """根据 id 获取 4399 账号。"""
+        return await (await self.conn.execute(
+            "SELECT * FROM sauth_accounts WHERE id = ?", (account_id,)
+        )).fetchone()
+
+    async def get_sauth_account_by_username(
+        self, username: str
+    ) -> Optional[aiosqlite.Row]:
+        """根据用户名获取 4399 账号。"""
+        return await (await self.conn.execute(
+            "SELECT * FROM sauth_accounts WHERE username = ?", (username,)
+        )).fetchone()
+
+    async def list_sauth_accounts(self) -> list[aiosqlite.Row]:
+        """列出所有 4399 账号 (按创建时间倒序)。"""
+        return await (await self.conn.execute(
+            "SELECT * FROM sauth_accounts ORDER BY created_at DESC"
+        )).fetchall()
+
+    async def get_active_sauth_accounts(self) -> list[aiosqlite.Row]:
+        """列出所有状态为 active 的 4399 账号 (按创建时间正序, 用于轮询)。"""
+        return await (await self.conn.execute(
+            "SELECT * FROM sauth_accounts WHERE status = 'active' "
+            "ORDER BY created_at ASC"
+        )).fetchall()
+
+    async def update_sauth_account_status(
+        self, account_id: str, status: str
+    ) -> None:
+        """更新 4399 账号状态。"""
+        await self.conn.execute(
+            "UPDATE sauth_accounts SET status = ? WHERE id = ?",
+            (status, account_id),
+        )
+        await self.conn.commit()
+
+    async def update_sauth_account_password(
+        self, account_id: str, password: str
+    ) -> None:
+        """更新 4399 账号密码。"""
+        await self.conn.execute(
+            "UPDATE sauth_accounts SET password = ? WHERE id = ?",
+            (password, account_id),
+        )
+        await self.conn.commit()
+
+    async def update_sauth_account_refresh(
+        self, account_id: str, uid: str, sauth_json: str
+    ) -> None:
+        """更新 4399 账号的刷新结果 (uid / sauth_json / last_refresh_at)。
+
+        同时将状态恢复为 active (登录成功即代表账号可用)。
+        """
+        await self.conn.execute(
+            "UPDATE sauth_accounts SET uid = ?, sauth_json = ?, "
+            "last_refresh_at = ?, status = 'active' WHERE id = ?",
+            (uid, sauth_json, _now(), account_id),
+        )
+        await self.conn.commit()
+
+    async def delete_sauth_account(self, account_id: str) -> bool:
+        """删除 4399 账号, 返回是否删除了行。"""
+        cur = await self.conn.execute(
+            "DELETE FROM sauth_accounts WHERE id = ?", (account_id,)
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    # ========================================================================
     # 统计/辅助方法
     # ========================================================================
 
@@ -622,6 +813,276 @@ class Database:
             "SELECT * FROM panels WHERE status = 'active' AND expire_at IS NOT NULL AND expire_at < ?",
             (_now(),),
         )).fetchall()
+
+    # ========================================================================
+    # 公告管理
+    # ========================================================================
+
+    async def create_announcement(
+        self,
+        title: str,
+        content: str,
+        user_id: str,
+        username: str,
+        pinned: bool = False,
+    ) -> str:
+        """创建公告，返回 announcement_id。"""
+        announcement_id = f"ann_{uuid.uuid4().hex[:12]}"
+        now = _now()
+        await self.conn.execute(
+            """INSERT INTO announcements
+               (announcement_id, title, content, created_by, created_by_username,
+                created_at, updated_at, pinned)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (announcement_id, title, content, user_id, username, now, now,
+             1 if pinned else 0),
+        )
+        await self.conn.commit()
+        return announcement_id
+
+    async def list_announcements(self) -> list[dict]:
+        """列出所有公告 (置顶优先, 然后按创建时间倒序)，每条包含 like_count 与 dislike_count。"""
+        rows = await (await self.conn.execute(
+            """SELECT a.*,
+                      (SELECT COUNT(*) FROM announcement_reactions r
+                       WHERE r.announcement_id = a.announcement_id
+                         AND r.reaction_type = 'like') AS like_count,
+                      (SELECT COUNT(*) FROM announcement_reactions r
+                       WHERE r.announcement_id = a.announcement_id
+                         AND r.reaction_type = 'dislike') AS dislike_count
+               FROM announcements a
+               ORDER BY a.pinned DESC, a.created_at DESC"""
+        )).fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_announcement(self, announcement_id: str) -> Optional[aiosqlite.Row]:
+        """根据 announcement_id 获取单条公告。"""
+        return await (await self.conn.execute(
+            "SELECT * FROM announcements WHERE announcement_id = ?",
+            (announcement_id,),
+        )).fetchone()
+
+    async def set_announcement_pin(self, announcement_id: str, pinned: bool) -> bool:
+        """设置公告置顶状态, 返回是否更新了行。"""
+        cur = await self.conn.execute(
+            "UPDATE announcements SET pinned = ?, updated_at = ? WHERE announcement_id = ?",
+            (1 if pinned else 0, _now(), announcement_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def delete_announcement(self, announcement_id: str) -> bool:
+        """删除公告及其所有评论与反应 (手动级联删除)。
+
+        Returns:
+            是否删除了公告行。
+        """
+        # 手动级联删除评论与反应 (不依赖 PRAGMA foreign_keys)
+        await self.conn.execute(
+            "DELETE FROM announcement_reactions WHERE announcement_id = ?",
+            (announcement_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM announcement_comments WHERE announcement_id = ?",
+            (announcement_id,),
+        )
+        cur = await self.conn.execute(
+            "DELETE FROM announcements WHERE announcement_id = ?",
+            (announcement_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def add_comment(
+        self,
+        announcement_id: str,
+        user_id: str,
+        username: str,
+        content: str,
+    ) -> str:
+        """添加评论，返回 comment_id。"""
+        comment_id = f"cmt_{uuid.uuid4().hex[:12]}"
+        await self.conn.execute(
+            """INSERT INTO announcement_comments
+               (comment_id, announcement_id, user_id, username, content, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (comment_id, announcement_id, user_id, username, content, _now()),
+        )
+        await self.conn.commit()
+        return comment_id
+
+    async def list_comments(self, announcement_id: str) -> list[dict]:
+        """列出指定公告的评论 (按时间正序)。"""
+        rows = await (await self.conn.execute(
+            "SELECT * FROM announcement_comments WHERE announcement_id = ? "
+            "ORDER BY created_at ASC",
+            (announcement_id,),
+        )).fetchall()
+        return [dict(r) for r in rows]
+
+    async def delete_comment(self, comment_id: str) -> bool:
+        """删除评论，返回是否删除了行。"""
+        cur = await self.conn.execute(
+            "DELETE FROM announcement_comments WHERE comment_id = ?",
+            (comment_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_comment(self, comment_id: str) -> Optional[aiosqlite.Row]:
+        """根据 comment_id 获取单条评论。"""
+        return await (await self.conn.execute(
+            "SELECT * FROM announcement_comments WHERE comment_id = ?",
+            (comment_id,),
+        )).fetchone()
+
+    async def get_user_reaction(
+        self, announcement_id: str, user_id: str
+    ) -> Optional[aiosqlite.Row]:
+        """获取指定用户对指定公告的反应 (无则 None)。"""
+        return await (await self.conn.execute(
+            "SELECT * FROM announcement_reactions "
+            "WHERE announcement_id = ? AND user_id = ?",
+            (announcement_id, user_id),
+        )).fetchone()
+
+    async def set_reaction(
+        self, announcement_id: str, user_id: str, reaction_type: str
+    ) -> str:
+        """设置用户对公告的反应 (upsert)。
+
+        利用 ``UNIQUE(announcement_id, user_id)`` 约束实现 upsert: 已存在
+        反应时更新 ``reaction_type`` 与 ``created_at``，否则插入新行。返回
+        最终生效的 reaction_id。
+        """
+        reaction_id = f"rxn_{uuid.uuid4().hex[:12]}"
+        await self.conn.execute(
+            """INSERT INTO announcement_reactions
+               (reaction_id, announcement_id, user_id, reaction_type, created_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(announcement_id, user_id) DO UPDATE SET
+                 reaction_type = excluded.reaction_type,
+                 created_at = excluded.created_at""",
+            (reaction_id, announcement_id, user_id, reaction_type, _now()),
+        )
+        await self.conn.commit()
+        row = await (await self.conn.execute(
+            "SELECT reaction_id FROM announcement_reactions "
+            "WHERE announcement_id = ? AND user_id = ?",
+            (announcement_id, user_id),
+        )).fetchone()
+        return row["reaction_id"] if row else reaction_id
+
+    async def remove_reaction(
+        self, announcement_id: str, user_id: str
+    ) -> bool:
+        """移除用户对公告的反应，返回是否删除了行。"""
+        cur = await self.conn.execute(
+            "DELETE FROM announcement_reactions "
+            "WHERE announcement_id = ? AND user_id = ?",
+            (announcement_id, user_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_reaction_counts(self, announcement_id: str) -> dict:
+        """获取公告的点赞/点踩计数。
+
+        Returns:
+            ``{"likes": int, "dislikes": int}``
+        """
+        like_row = await (await self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM announcement_reactions "
+            "WHERE announcement_id = ? AND reaction_type = 'like'",
+            (announcement_id,),
+        )).fetchone()
+        dislike_row = await (await self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM announcement_reactions "
+            "WHERE announcement_id = ? AND reaction_type = 'dislike'",
+            (announcement_id,),
+        )).fetchone()
+        return {
+            "likes": like_row["cnt"] if like_row else 0,
+            "dislikes": dislike_row["cnt"] if dislike_row else 0,
+        }
+
+    async def list_announcement_logs(self) -> list[dict]:
+        """获取公告活动日志 (管理员用)。
+
+        汇总反应与评论，并关联公告标题与用户名，按时间倒序返回。每条记录
+        包含 ``type`` 字段 (``reaction`` 或 ``comment``)，标识活动类型。
+        """
+        reactions = await (await self.conn.execute(
+            """SELECT r.reaction_id, r.announcement_id, a.title AS announcement_title,
+                      r.user_id, u.username, r.reaction_type, r.created_at
+               FROM announcement_reactions r
+               LEFT JOIN announcements a ON r.announcement_id = a.announcement_id
+               LEFT JOIN users u ON r.user_id = u.user_id
+               ORDER BY r.created_at DESC"""
+        )).fetchall()
+        comments = await (await self.conn.execute(
+            """SELECT c.comment_id, c.announcement_id, a.title AS announcement_title,
+                      c.user_id, c.username, c.content, c.created_at
+               FROM announcement_comments c
+               LEFT JOIN announcements a ON c.announcement_id = a.announcement_id
+               ORDER BY c.created_at DESC"""
+        )).fetchall()
+
+        logs: list[dict] = []
+        for r in reactions:
+            logs.append({
+                "type": "reaction",
+                "reaction_id": r["reaction_id"],
+                "announcement_id": r["announcement_id"],
+                "announcement_title": r["announcement_title"],
+                "user_id": r["user_id"],
+                "username": r["username"],
+                "reaction_type": r["reaction_type"],
+                "created_at": r["created_at"],
+            })
+        for c in comments:
+            logs.append({
+                "type": "comment",
+                "comment_id": c["comment_id"],
+                "announcement_id": c["announcement_id"],
+                "announcement_title": c["announcement_title"],
+                "user_id": c["user_id"],
+                "username": c["username"],
+                "content": c["content"],
+                "created_at": c["created_at"],
+            })
+
+        logs.sort(key=lambda x: x["created_at"], reverse=True)
+        return logs
+
+    # ========================================================================
+    # 系统设置 (持久化 NovaBuilder 凭据等)
+    # ========================================================================
+
+    async def get_setting(self, key: str) -> Optional[str]:
+        """获取系统设置值, 不存在返回 None。"""
+        row = await (await self.conn.execute(
+            "SELECT value FROM system_settings WHERE key = ?", (key,)
+        )).fetchone()
+        return row["value"] if row else None
+
+    async def set_setting(self, key: str, value: str) -> None:
+        """设置系统设置值 (upsert)。"""
+        await self.conn.execute(
+            "INSERT INTO system_settings (key, value, updated_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, value, _now()),
+        )
+        await self.conn.commit()
+
+    async def delete_setting(self, key: str) -> bool:
+        """删除系统设置, 返回是否删除了行。"""
+        cur = await self.conn.execute(
+            "DELETE FROM system_settings WHERE key = ?", (key,)
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
 
 
 # 全局单例

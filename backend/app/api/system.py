@@ -39,7 +39,7 @@ logger = get_logger("api.system")
 router = APIRouter(prefix="/api/system", tags=["系统"])
 
 #: 应用版本号
-APP_VERSION: str = "1.2"
+APP_VERSION: str = "1.5"
 
 #: 启动时间戳（模块导入即记录）
 _START_TIME: float = time.time()

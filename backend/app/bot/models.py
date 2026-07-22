@@ -133,13 +133,16 @@ class BotConfig:
     api_key: str = ""
     cookie: str = ""
     sauth_json: str = ""
-    auth_method: str = "auto"  # auto / direct / fatalder / cookie / fbauth
+    auth_method: str = "auto"  # auto / direct / fatalder / cookie / fbauth / 4399
     device_model: str = "Xiaomi 13"
     access_point_type: AccessPointType = AccessPointType.PUREPYTHON
     auto_reconnect: bool = True
     max_reconnect_attempts: int = 3
     reconnect_delay: int = 30  # 基础延迟30秒,避免快速重连触发反作弊
     account_id: str = ""
+    fb_token: str = ""
+    username: str = ""
+    password: str = ""
 
 
 # ======================================================================

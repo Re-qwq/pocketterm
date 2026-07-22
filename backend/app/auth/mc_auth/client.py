@@ -190,9 +190,13 @@ class AuthClient:
         server_password: str,
         api_key: str,
     ) -> AuthResult:
-        # 1. 获取一次性 secret
-        secret = await self._fetch_secret()
-        logger.debug("获取 secret 成功: %s...", secret[:20])
+        # 1. 获取一次性 secret (用于 NV1 服务器)
+        try:
+            secret = await self._fetch_secret()
+            logger.debug("获取 secret 成功: %s...", secret[:20])
+        except Exception as e:
+            logger.warning(f"获取 secret 失败, 将直接使用 API Key: {e}")
+            secret = api_key  # 降级: 直接使用 API Key 作为 Bearer token
 
         # 2. 构造登录请求
         outer_sauth = json.dumps(
@@ -210,12 +214,14 @@ class AuthClient:
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         url = f"{self.auth_server}/api/phoenix/login"
+        # 使用 API Key 作为 Bearer token (NovaBuilder 和 NV1 都接受 UUID 格式)
+        bearer_token = api_key if api_key else secret
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {secret}",
+            "Authorization": f"Bearer {bearer_token}",
             "User-Agent": self.user_agent,
         }
-        if api_key:
+        if api_key and api_key != secret:
             headers["X-API-Key"] = api_key
 
         try:
@@ -223,6 +229,9 @@ class AuthClient:
                 text = await resp.text()
         except aiohttp.ClientError as exc:
             raise NetworkError(f"登录请求失败: {exc}") from exc
+
+        # 调试: 打印 NV1 服务器响应
+        logger.info("NV1 登录响应 (HTTP %d): %s", resp.status, text[:500])
 
         # 3. 处理响应
         self._raise_for_http_status(resp.status, text)

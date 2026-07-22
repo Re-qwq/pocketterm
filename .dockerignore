@@ -13,12 +13,19 @@ __pycache__/
 dist/
 build/
 
-# 数据库文件（运行时生成，通过卷挂载持久化）
-*.db
-*.db-journal
+# Git 版本控制
+.git/
+.gitignore
+.gitattributes
 
-# 日志文件
-*.log
+# 数据库文件 (运行时生成, 通过卷挂载持久化)
+backend/data/*.db
+backend/data/*.db-journal
+
+# 数据 JSON 文件 (运行时生成或敏感数据, 通过卷挂载持久化)
+# 例外: device_fingerprints.json 需要打包进镜像
+backend/data/*.json
+!backend/data/device_fingerprints.json
 
 # 虚拟环境
 venv/
@@ -26,10 +33,11 @@ venv/
 env/
 backend/venv/
 
-# Git 版本控制
-.git/
-.gitignore
-.gitattributes
+# 日志文件
+*.log
+
+# Node 依赖
+node_modules/
 
 # 截图
 screenshots/
@@ -37,19 +45,11 @@ screenshots/
 # 文档
 docs/
 
-# 工具（Windows 可执行文件，Docker 中不需要）
+# 工具 (Windows 可执行文件, Docker 中不需要)
 tools/
 
-# 二进制构建产物
-access_point_go/pocketterm_ap
-access_point_go/pocketterm_ap.bak
-
-# 敏感数据（运行时生成，不应打包进镜像）
+# 敏感数据
 sauth_batch.json
-backend/data/cookie_pool.json
-backend/data/accounts.json
-backend/data/device_fingerprints.json
-config.local.yaml
 
 # IDE 配置
 .idea/
@@ -57,12 +57,12 @@ config.local.yaml
 *.swp
 *.swo
 
-# 环境变量文件（可能包含敏感信息）
+# 环境变量文件 (可能包含敏感信息)
 .env
 .env.local
 .env.production
 
-# Docker 构建文件（不需要在镜像内）
+# Docker 构建文件 (不需要在镜像内)
 Dockerfile
 docker-compose.yml
 docker-compose.*.yml
@@ -72,5 +72,5 @@ docker-compose.*.yml
 .DS_Store
 Thumbs.db
 
-# Node（预留）
-node_modules/
+# Go 构建备份
+access_point_go/pocketterm_ap.bak

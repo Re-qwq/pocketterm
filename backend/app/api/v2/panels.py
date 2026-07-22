@@ -88,18 +88,27 @@ async def create_panel(req: CreatePanelRequest, request: Request):
 # ============================================================================
 
 @router.get("")
-async def list_panels(request: Request):
-    """列出面板。用户看自己的, 管理员看所有。"""
+async def list_panels(request: Request, scope: str = "all"):
+    """列出面板。
+
+    - ``scope=all`` (管理员默认): 管理员/超管查看所有面板; 普通用户只看自己的。
+    - ``scope=mine``: 无论角色, 始终只查看自己的面板。
+    """
     from .auth import get_current_user
     user = await get_current_user(request)
     if user is None:
         raise HTTPException(status_code=401, detail="未登录")
     db = await get_db()
 
-    if user["role"] in ("superadmin", "admin"):
-        panels = await db.list_all_panels()
-    else:
+    if scope == "mine":
+        # 始终只看自己的面板, 与角色无关
         panels = await db.list_panels_by_user(user["user_id"])
+    else:
+        # scope == "all": 管理员/超管查看所有面板, 普通用户只看自己的
+        if user["role"] in ("superadmin", "admin"):
+            panels = await db.list_all_panels()
+        else:
+            panels = await db.list_panels_by_user(user["user_id"])
 
     # 检查过期状态并自动更新
     now = time.time()
@@ -191,6 +200,15 @@ async def renew_panel(panel_id: str, req: RenewPanelRequest, request: Request):
     if user["role"] == "user" and panel["user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="无权续费此面板")
 
+    # 超级管理员面板保护: 普通管理员不能续费超级管理员的面板
+    panel_owner = await db.get_user_by_id(panel["user_id"])
+    if (
+        panel_owner is not None
+        and panel_owner["role"] == "superadmin"
+        and user["role"] != "superadmin"
+    ):
+        raise HTTPException(status_code=403, detail="无权操作超级管理员的面板")
+
     # 验证续期卡密
     card = await db.get_card_by_key(req.card_key.upper())
     if card is None:
@@ -253,6 +271,15 @@ async def delete_panel(panel_id: str, request: Request):
     # 权限检查
     if user["role"] == "user" and panel["user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="无权删除此面板")
+
+    # 超级管理员面板保护: 普通管理员不能删除超级管理员的面板
+    panel_owner = await db.get_user_by_id(panel["user_id"])
+    if (
+        panel_owner is not None
+        and panel_owner["role"] == "superadmin"
+        and user["role"] != "superadmin"
+    ):
+        raise HTTPException(status_code=403, detail="无权操作超级管理员的面板")
 
     panel_name = panel["name"]
 

@@ -312,15 +312,47 @@ class PurePythonAccessPoint(AccessPoint):
     ) -> Optional[dict]:
         """执行网易直连认证。
 
+        支持多种凭证来源:
+            1. cookie / sauth_json (直接使用)
+            2. 4399 账号密码 (通过 OAuth2 登录获取 sauth_json)
+            3. 无凭证 (自动生成 sauth_json, 访客模式)
+
         Returns:
             包含 chain_info 和 server_address 的字典，失败返回 None
         """
         cookie = self.config.get("cookie", "")
         sauth_json = self.config.get("sauth_json", "")
+        username = self.config.get("username", "")
+        password = self.config.get("password", "")
+
+        # 如果没有 cookie/sauth_json 但有 4399 账号, 先通过 OAuth2 获取
+        if not cookie and not sauth_json and username and password:
+            self._log(f"正在通过 4399 OAuth2 登录获取游戏凭证 (用户: {username})...", "protocol")
+            try:
+                from ..auth.netease_direct.login_4399_oauth2 import login_4399_oauth2
+                import json as _json
+                result = await login_4399_oauth2(username, password)
+                if result and result.sauth_json:
+                    sauth_json = _json.dumps(result.sauth_json, ensure_ascii=False)
+                    self.config["sauth_json"] = sauth_json
+                    self._log("4399 OAuth2 登录成功!", "success")
+                else:
+                    self._log("4399 OAuth2 登录失败", "error")
+                    return None
+            except Exception as e:
+                self._log(f"4399 OAuth2 登录异常: {e}", "error")
+                return None
 
         if not cookie and not sauth_json:
-            self._log("未提供认证凭证 (cookie 或 sauth_json)", "error")
-            return None
+            # 尝试自动生成 sauth_json (访客模式)
+            try:
+                from ..auth.netease_direct import generate_sauth_json
+                self._log("无凭证, 自动生成 sauth_json (访客模式)...", "warning")
+                sauth_json = generate_sauth_json(mode="pc")
+                self.config["sauth_json"] = sauth_json
+            except Exception as e:
+                self._log(f"自动生成 sauth_json 失败: {e}", "error")
+                return None
 
         try:
             from ..auth.netease_direct import NeteaseDirectClient

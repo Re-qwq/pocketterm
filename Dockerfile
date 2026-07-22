@@ -10,33 +10,36 @@
 #   docker run -d --name pocketterm -p 8000:8000 \
 #     -v pocketterm_data:/app/backend/data \
 #     pocketterm:latest
-#
-# 或使用 docker-compose：
-#   docker compose up -d
 # =============================================================================
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # -----------------------------------------------------------------------------
 # 环境变量
 # -----------------------------------------------------------------------------
-ENV POCKETTERM_ENV=production \
-    PYTHONUNBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8000 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    TZ=Asia/Shanghai
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # -----------------------------------------------------------------------------
 # 安装系统依赖
 # -----------------------------------------------------------------------------
-# curl: 供 docker-compose healthcheck 使用
-# tzdata: 时区数据（配合 TZ 环境变量）
+# ddddocr (OCR 库) 依赖以下系统库:
+#   libglib2.0-0     - GLib 底层库 (PIL/OpenCV 依赖)
+#   libgl1-mesa-glx  - OpenGL 库 (图像处理依赖)
+#   libsm6           - X11 Session Management (OpenCV 依赖)
+#   libxrender1      - X11 Render 扩展 (PIL 依赖)
+#   libxext6         - X11 扩展库 (PIL 依赖)
+# curl 用于健康检查
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        libglib2.0-0 \
+        libgl1-mesa-glx \
+        libsm6 \
+        libxrender1 \
+        libxext6 \
         curl \
-        tzdata \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
-    && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
@@ -45,11 +48,9 @@ RUN apt-get update \
 WORKDIR /app
 
 # -----------------------------------------------------------------------------
-# 安装 Python 依赖（单独一层，利用 Docker 层缓存）
+# 安装 Python 依赖 (单独一层, 利用 Docker 层缓存)
 # -----------------------------------------------------------------------------
-# 先仅复制 requirements.txt，当依赖不变时可复用缓存层
 COPY backend/requirements.txt /app/backend/requirements.txt
-
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 # -----------------------------------------------------------------------------
@@ -58,7 +59,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/ /app/backend/
 
 # -----------------------------------------------------------------------------
-# 复制前端代码（由 FastAPI 静态服务）
+# 复制前端代码 (由 FastAPI 静态服务)
 # -----------------------------------------------------------------------------
 COPY frontend/ /app/frontend/
 
@@ -68,27 +69,18 @@ COPY frontend/ /app/frontend/
 COPY plugins/ /app/plugins/
 
 # -----------------------------------------------------------------------------
-# 暂存静态数据文件
+# 复制 Go 接入点二进制及源码
 # -----------------------------------------------------------------------------
-# backend/data/ 目录包含运行所需的静态 JSON 文件
-# (block_mapping.json, version_config.json, import_settings.json 等)。
-# 由于该目录会被 Docker 卷挂载覆盖，构建时将其暂存到 data_staging，
-# 由入口脚本在首次启动时复制到挂载的卷中。
-RUN mkdir -p /app/backend/data_staging \
-    && cp /app/backend/data/*.json /app/backend/data_staging/ 2>/dev/null || true
+COPY access_point_go/ /app/access_point_go/
+
+# 使 Go 二进制可执行
+RUN chmod +x /app/access_point_go/pocketterm_ap || true
 
 # -----------------------------------------------------------------------------
-# 创建数据目录用于持久化
+# 复制启动脚本
 # -----------------------------------------------------------------------------
-# SQLite 数据库、日志文件、配置文件均存放在此目录，
-# 通过 docker-compose 卷挂载实现持久化
-RUN mkdir -p /app/backend/data
-
-# -----------------------------------------------------------------------------
-# 复制入口脚本
-# -----------------------------------------------------------------------------
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 # -----------------------------------------------------------------------------
 # 暴露端口
@@ -96,15 +88,11 @@ RUN chmod +x /app/docker-entrypoint.sh
 EXPOSE 8000
 
 # -----------------------------------------------------------------------------
-# 设置工作目录为 backend（uvicorn 启动目录）
+# 设置工作目录为 backend (uvicorn 启动目录)
 # -----------------------------------------------------------------------------
 WORKDIR /app/backend
 
 # -----------------------------------------------------------------------------
-# 入口点
+# 启动命令
 # -----------------------------------------------------------------------------
-# 入口脚本负责：
-#   1. 初始化数据目录（从暂存目录复制静态文件到挂载卷）
-#   2. 初始化配置文件（从生产模板生成持久化配置）
-#   3. 启动 uvicorn
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

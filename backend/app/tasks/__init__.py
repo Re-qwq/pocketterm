@@ -3,10 +3,12 @@ from .background_tasks import (
     check_expired_panels_loop,
     nv1_auto_refresh_loop,
     ban_detection_cleanup_loop,
+    sauth_auto_refresh_loop,
 )
 
 __all__ = [
     "check_expired_panels_loop",
     "nv1_auto_refresh_loop",
     "ban_detection_cleanup_loop",
+    "sauth_auto_refresh_loop",
 ]

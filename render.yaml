@@ -1,0 +1,33 @@
+# =============================================================================
+# Render 配置文件
+# 文档: https://render.com/docs/blueprint-spec
+# =============================================================================
+# 部署步骤:
+#   1. 在 Render 仪表板中创建新的 Blueprint
+#   2. 选择此 render.yaml 文件所在的仓库
+#   3. 设置环境变量:
+#      - POCKETTERM_JWT_SECRET (必填, JWT 签名密钥)
+#      - POCKETTERM_CORS_ORIGINS (必填, 允许的跨域来源)
+#   4. Render 将自动构建并部署
+# =============================================================================
+
+services:
+  - type: web
+    name: pocketterm
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v2/system/info
+    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PORT
+        value: "8000"
+      - key: POCKETTERM_ENV
+        value: production
+      # 以下密钥请在 Render 仪表板中设置 (不要明文写在此文件中)
+      # - key: POCKETTERM_JWT_SECRET
+      #   sync: false
+      # - key: POCKETTERM_CORS_ORIGINS
+      #   sync: false

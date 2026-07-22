@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Optional
 
@@ -9,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.database import get_db
+
+logger = logging.getLogger("pocketterm.bots")
 
 router = APIRouter(prefix="/api/v2/bots", tags=["bots"])
 
@@ -86,14 +89,77 @@ async def _build_bot_config(bot, db):
         "access_point_type": bot["access_point_type"],
     })
     # 如果有 account_id, 从账号库获取 sauth_json
+    sauth_updated_at = 0.0
+    account_metadata: dict = {}
     if bot["account_id"]:
         account = await db.get_account(bot["account_id"])
         if account:
             try:
-                metadata = json.loads(account["metadata"]) if isinstance(account["metadata"], str) else account["metadata"]
-                bot_config_data["sauth_json"] = metadata.get("sauth_json", "")
+                account_metadata = json.loads(account["metadata"]) if isinstance(account["metadata"], str) else account["metadata"]
+                if isinstance(account_metadata, dict):
+                    bot_config_data["sauth_json"] = account_metadata.get("sauth_json", "")
+                    sauth_updated_at = account_metadata.get("sauth_updated_at", 0.0) or 0.0
             except (json.JSONDecodeError, KeyError, TypeError):
-                pass
+                account_metadata = {}
+                bot_config_data["sauth_json"] = bot_config_data.get("sauth_json", "")
+
+    # 回退: 若账号未提供时间戳, 使用 bot config 中的时间戳
+    if not sauth_updated_at:
+        sauth_updated_at = bot_config_data.get("sauth_updated_at", 0.0) or 0.0
+
+    # 自动刷新: 若 sauth_json 缺失或已过期 (> 2 小时),
+    # 通过 SauthRefresher 获取新鲜凭证
+    current_sauth = bot_config_data.get("sauth_json", "")
+    need_refresh = bool(
+        not current_sauth
+        or (sauth_updated_at and (time.time() - sauth_updated_at) > 2 * 3600)
+    )
+    if need_refresh:
+        try:
+            from app.auth.sauth_refresh import sauth_refresher
+            fresh_sauth = await sauth_refresher.get_fresh_sauth()
+            if fresh_sauth:
+                bot_config_data["sauth_json"] = fresh_sauth
+                logger.info(
+                    f"机器人 {bot['name']} sauth_json 已通过 "
+                    f"SauthRefresher 自动刷新"
+                )
+                # 持久化回账号 metadata (附带时间戳), 便于下次判断
+                if bot["account_id"]:
+                    try:
+                        new_meta = dict(account_metadata) if isinstance(account_metadata, dict) else {}
+                        new_meta["sauth_json"] = fresh_sauth
+                        new_meta["sauth_updated_at"] = time.time()
+                        await db.conn.execute(
+                            "UPDATE accounts SET metadata = ? WHERE account_id = ?",
+                            (json.dumps(new_meta, ensure_ascii=False), bot["account_id"]),
+                        )
+                        await db.conn.commit()
+                    except Exception:
+                        logger.debug("回写刷新后的 sauth_json 到账号 metadata 失败", exc_info=True)
+            else:
+                logger.warning(
+                    f"机器人 {bot['name']} sauth_json 已过期或缺失, 但自动刷新失败"
+                    f" (无可用 4399 账号或登录失败)"
+                )
+        except Exception as e:
+            logger.warning(f"自动刷新 sauth_json 异常: {e}")
+
+    # 如果 bot config 中没有 api_key, 从 NV1 管理器注入
+    if not bot_config_data.get("api_key"):
+        try:
+            from app.auth.nv1_manager import nv1_manager
+            nv1_key = nv1_manager.get_key()
+            if nv1_key:
+                bot_config_data["api_key"] = nv1_key
+                logger.info(f"已从 NV1 管理器注入 API Key (前8位: {nv1_key[:8]}...)")
+            # 同时注入正确的认证服务器 URL
+            auth_server = nv1_manager.get_auth_server()
+            if auth_server:
+                bot_config_data["auth_server"] = auth_server
+                logger.info(f"已从 NV1 管理器注入认证服务器: {auth_server}")
+        except Exception as e:
+            logger.warning(f"获取 NV1 API Key 失败: {e}")
 
     return BotConfig(
         name=bot_config_data.get("name", ""),
@@ -105,6 +171,7 @@ async def _build_bot_config(bot, db):
         auth_server=bot_config_data.get("auth_server", "https://nv1.nethard.pro"),
         api_key=bot_config_data.get("api_key", ""),
         sauth_json=bot_config_data.get("sauth_json", ""),
+        cookie=bot_config_data.get("cookie", ""),
         auth_method=bot_config_data.get("auth_method", "auto"),
         device_model=bot_config_data.get("device_model", "Xiaomi 13"),
         access_point_type=AccessPointType(bot_config_data.get("access_point_type", "neomega")),
@@ -112,6 +179,9 @@ async def _build_bot_config(bot, db):
         max_reconnect_attempts=bot_config_data.get("max_reconnect_attempts", 3),
         reconnect_delay=bot_config_data.get("reconnect_delay", 30),
         account_id=bot_config_data.get("account_id", ""),
+        fb_token=bot_config_data.get("fb_token", ""),
+        username=bot_config_data.get("username", ""),
+        password=bot_config_data.get("password", ""),
     )
 
 
@@ -264,10 +334,13 @@ async def list_accounts(request: Request):
 
 class CreateBotFromPoolRequest(BaseModel):
     name: str = "Bot"  # 机器人名称，默认为 Bot
-    account_source: str = "pool"  # pool 或 new
+    account_source: str = "pool"  # pool / new / manual
     username_4399: str = ""
     password_4399: str = ""
     captcha_answer: str = ""
+    cookie: str = ""
+    sauth_json: str = ""
+    server_code: str = ""
 
 
 @router.post("/create")
@@ -290,70 +363,162 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
     # 如果 name 为默认值，加上时间戳让名字唯一
     bot_name = req.name
     if bot_name == "Bot":
-        bot_name = f"Bot_{int(time.time()) % 100000}"
+        bot_name = f"PT_{int(time.time()) % 100000}"
 
     # 获取或创建账号
     account_id = ""
+    new_account_sauth = ""  # 自动注册的 sauth_json (如果有)
+    pool_account_sauth = ""  # 从 Cookie 池获取的 sauth_json (如果有)
     if req.account_source == "pool":
-        # 从Cookie池获取一个未使用的活跃账号
+        # 从Cookie池获取一个未使用的活跃账号 (优先选择有 sauth_json 的)
         row = await (await db.conn.execute(
-            "SELECT account_id, username FROM accounts WHERE status = 'active' "
-            "ORDER BY last_used_at DESC NULLS LAST LIMIT 1"
+            "SELECT account_id, username, metadata FROM accounts WHERE status = 'active' "
+            "AND metadata LIKE '%sauth_json%' "
+            "ORDER BY last_used_at IS NULL DESC, last_used_at ASC LIMIT 1"
         )).fetchone()
         if row:
             account_id = row["account_id"] if hasattr(row, "keys") else row[0]
+            # 提取 metadata 中的 sauth_json
+            meta_str = row["metadata"] if hasattr(row, "keys") else row[2]
+            if meta_str:
+                try:
+                    meta = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                    if isinstance(meta, dict) and meta.get("sauth_json"):
+                        pool_account_sauth = meta["sauth_json"]
+                except Exception:
+                    pass
             # 标记账号为已使用
             await db.conn.execute(
                 "UPDATE accounts SET last_used_at = ? WHERE account_id = ?",
                 (time.time(), account_id)
             )
             await db.conn.commit()
-        else:
-            raise HTTPException(status_code=400, detail="Cookie池中没有可用账号")
+
+        # Cookie池中没有可用的 sauth_json (无账号或提取失败),
+        # 尝试通过 SauthRefresher 自动获取新鲜凭证
+        if not pool_account_sauth:
+            try:
+                from app.auth.sauth_refresh import sauth_refresher
+                fresh_sauth = await sauth_refresher.get_fresh_sauth()
+                if fresh_sauth:
+                    pool_account_sauth = fresh_sauth
+                    logger.info(
+                        "Cookie池无可用 sauth_json, 已通过 SauthRefresher 自动获取"
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cookie池中没有可用账号, 且自动刷新 sauth_json 失败"
+                        " (无可用 4399 账号或登录均失败)",
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500, detail=f"自动刷新 sauth_json 异常: {e}",
+                )
     elif req.account_source == "new":
-        # 创建新4399账号 - 这里先记录，实际登录需要4399验证码流程
-        if not req.username_4399 or not req.password_4399:
-            raise HTTPException(status_code=400, detail="需要4399用户名和密码")
-        # 尝试4399登录
+        # 自动注册新4399账号 (使用 AccountRegistrar 自动完成注册+验证码OCR+登录)
         try:
-            from app.auth.netease_direct.login_4399 import login_4399_to_sauth
-            result = await login_4399_to_sauth(req.username_4399, req.password_4399)
-            if not result["success"]:
+            from app.auth.netease_direct.account_register import AccountRegistrar, CaptchaHandler
+            # 使用 OCR 自动识别验证码, 避免人工输入
+            captcha_handler = CaptchaHandler(use_ocr=True)
+            async with AccountRegistrar(captcha_handler=captcha_handler) as reg:
+                result = await reg.register_and_get_sauth()
+            if not result.get("success"):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"4399登录失败: {result.get('message', '未知错误')}",
+                    detail=f"4399账号自动注册失败: {result.get('message', '未知错误')}",
                 )
             # 保存账号到数据库
             import uuid as _uuid
             account_id = f"a_{_uuid.uuid4().hex[:12]}"
+            sauth_json = result.get("sauth_json", "")
+            new_account_sauth = sauth_json
+            metadata = json.dumps({"sauth_json": sauth_json}, ensure_ascii=False) if sauth_json else None
             await db.conn.execute(
-                "INSERT INTO accounts (account_id, username, password, player_name, status, created_at) "
-                "VALUES (?, ?, ?, ?, 'active', ?)",
-                (account_id, req.username_4399, req.password_4399, bot_name, time.time())
+                "INSERT INTO accounts (account_id, username, password, player_name, status, created_at, metadata) "
+                "VALUES (?, ?, ?, ?, 'active', ?, ?)",
+                (
+                    account_id,
+                    result.get("username", f"auto_{account_id[:8]}"),
+                    result.get("password", ""),
+                    bot_name,
+                    time.time(),
+                    metadata,
+                )
             )
             await db.conn.commit()
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"4399登录异常: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"4399账号自动注册异常: {str(e)}")
 
-    # 获取用户的第一个面板，如果没有则创建一个
+    elif req.account_source == "manual":
+        # 手动输入凭证 (cookie/sauth_json 或 4399 账号密码)
+        import uuid as _uuid
+        account_id = f"a_{_uuid.uuid4().hex[:12]}"
+
+        # 构建账号元数据
+        metadata = {}
+        if req.cookie:
+            metadata["sauth_json"] = req.cookie
+        if req.sauth_json:
+            metadata["sauth_json"] = req.sauth_json
+
+        # 保存账号到数据库
+        display_name = req.username_4399 or bot_name
+        await db.conn.execute(
+            "INSERT INTO accounts (account_id, username, password, player_name, status, created_at, metadata) "
+            "VALUES (?, ?, ?, ?, 'active', ?, ?)",
+            (
+                account_id,
+                req.username_4399 or f"manual_{account_id[:8]}",
+                req.password_4399 or "",
+                display_name,
+                time.time(),
+                json.dumps(metadata, ensure_ascii=False),
+            )
+        )
+        await db.conn.commit()
+
+    # 获取用户的第一个面板，如果没有则报错 (不允许无卡密创建面板)
     if user_panels:
         panel_id = user_panels[0]["panel_id"]
     else:
-        # 创建一个面板
-        panel_id = await db.create_panel(
-            user_id=user["user_id"],
-            name=f"{user['username']}的面板",
+        # 用户没有面板 - 不允许自动创建 (需要卡密)
+        raise HTTPException(
+            status_code=403,
+            detail="您还没有面板, 请先使用卡密激活面板后再创建机器人",
         )
 
     # 创建机器人 - 使用默认配置，用户可在面板设置中修改
     config = {
         "server_type": "rental",
-        "server_code": "",
+        "server_code": req.server_code or "",
         "game_version": "1.21.93",
         "access_point_type": "purepython",
     }
+    # 如果手动输入了 4399 账号密码，保存到 config 供启动时使用
+    if req.account_source == "manual" and req.username_4399 and req.password_4399:
+        config["username"] = req.username_4399
+        config["password"] = req.password_4399
+        config["auth_method"] = "4399"
+    # 如果手动输入了 cookie/sauth_json，保存到 config
+    if req.account_source == "manual" and (req.cookie or req.sauth_json):
+        config["sauth_json"] = req.sauth_json or req.cookie
+        config["sauth_updated_at"] = time.time()
+        config["auth_method"] = "direct"
+    # 如果自动注册了 4399 账号, 从注册结果中提取 sauth_json
+    if req.account_source == "new" and new_account_sauth:
+        config["sauth_json"] = new_account_sauth
+        config["sauth_updated_at"] = time.time()
+        config["auth_method"] = "direct"
+    # 如果从 Cookie 池获取了 sauth_json, 保存到 config
+    if req.account_source == "pool" and pool_account_sauth:
+        config["sauth_json"] = pool_account_sauth
+        config["sauth_updated_at"] = time.time()
+        config["auth_method"] = "direct"
 
     bot_id = await db.create_bot_instance(
         panel_id=panel_id,
@@ -618,6 +783,13 @@ async def update_bot_config(bot_id: str, req: UpdateBotConfigRequest, request: R
         old_config.update(req.config)
     if req.game_version:
         old_config["game_version"] = req.game_version
+    # 同步 server_code 和 server_type 到 config, 供接入点读取
+    if req.server_code is not None:
+        old_config["server_code"] = req.server_code
+    if req.server_type is not None:
+        old_config["server_type"] = req.server_type
+    if req.access_point_type is not None:
+        old_config["access_point_type"] = req.access_point_type
 
     config_json = json.dumps(old_config, ensure_ascii=False)
 

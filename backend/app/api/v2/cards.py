@@ -153,9 +153,14 @@ async def list_cards(
     key_type: Optional[str] = None,
     status: Optional[str] = None,
     created_by: Optional[str] = None,
+    include_revoked: bool = False,
     limit: int = 100,
 ):
-    """列出卡密。管理员看自己的，超管可看所有人的。"""
+    """列出卡密。管理员看自己的，超管可看所有人的。
+
+    ``include_revoked`` 为 False (默认) 时隐藏已撤销的卡密; 为 True 时显示
+    全部卡密 (用于管理员审计)。
+    """
     from .auth import require_admin
     admin = await require_admin(request)
     db = await get_db()
@@ -172,6 +177,10 @@ async def list_cards(
         key_type=key_type,
         status=status,
     )
+
+    # 默认隐藏已撤销的卡密, 除非显式请求包含
+    if not include_revoked:
+        cards = [c for c in cards if c["status"] != "revoked"]
 
     return {
         "success": True,

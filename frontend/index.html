@@ -858,7 +858,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     background: var(--bg-card);
 }
 .console-tab i { font-size: 12px; }
-.console-body { flex: 1; overflow: hidden; position: relative; }
+.console-body { flex: 1; overflow: hidden; position: relative; min-height: 0; }
 .console-panel { display: none; height: 100%; flex-direction: column; }
 .console-panel.active { display: flex; }
 
@@ -992,7 +992,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 .plugin-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
 /* ---- Settings Tab ---- */
-.settings-form { flex: 1; overflow-y: auto; padding: 20px; }
+.settings-form { flex: 1; overflow-y: auto; padding: 20px; min-height: 0; }
 .settings-form .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .settings-form .form-grid .full { grid-column: 1 / -1; }
 
@@ -1085,6 +1085,18 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 }
 .filter-select:focus { border-color: var(--color-primary); }
 .filter-select option { background: var(--bg-card); }
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.filter-checkbox input { cursor: pointer; width: 15px; height: 15px; accent-color: var(--color-primary); }
+.filter-checkbox:hover { color: var(--text-primary); }
 
 /* ==========================================================================
    Empty States
@@ -1352,6 +1364,104 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     .panel-detail-actions { width: 100%; }
     .panel-detail-actions .btn { flex: 1; }
 }
+/* ---- Announcements ---- */
+.ann-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    transition: all var(--transition);
+}
+.ann-card:hover { border-color: var(--border-default); box-shadow: var(--shadow-sm); }
+.ann-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.ann-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+.ann-meta { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; }
+.ann-content { font-size: 14px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 16px; white-space: pre-wrap; word-break: break-word; }
+.ann-actions { display: flex; align-items: center; gap: 16px; padding-top: 12px; border-top: 1px solid var(--border-muted); }
+.ann-reaction { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: all 0.2s; user-select: none; padding: 4px 8px; border-radius: var(--radius-sm); }
+.ann-reaction:hover { background: var(--bg-hover); }
+.ann-reaction.active-like { color: var(--color-success); font-weight: 600; }
+.ann-reaction.active-dislike { color: var(--color-danger); font-weight: 600; }
+.ann-reaction i { font-size: 16px; }
+.ann-delete-btn { margin-left: auto; cursor: pointer; color: var(--text-tertiary); font-size: 13px; transition: color 0.2s; }
+.ann-delete-btn:hover { color: var(--color-danger); }
+.ann-comments { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-muted); }
+.ann-comments-toggle { font-size: 13px; color: var(--color-primary); cursor: pointer; user-select: none; }
+.ann-comments-toggle:hover { text-decoration: underline; }
+.ann-comment { padding: 8px 12px; background: var(--bg-input); border-radius: var(--radius-sm); margin-top: 8px; font-size: 13px; }
+.ann-comment-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.ann-comment-user { font-weight: 600; font-size: 12px; color: var(--color-primary); }
+.ann-comment-time { font-size: 11px; color: var(--text-tertiary); }
+.ann-comment-content { color: var(--text-secondary); }
+.ann-comment-delete { cursor: pointer; color: var(--text-tertiary); font-size: 11px; margin-left: 8px; }
+.ann-comment-delete:hover { color: var(--color-danger); }
+.ann-comment-input { display: flex; gap: 8px; margin-top: 8px; }
+.ann-comment-input input { flex: 1; }
+.ann-log-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border-muted); font-size: 13px; }
+.ann-log-item:last-child { border-bottom: none; }
+.ann-log-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+.ann-log-icon.like { background: rgba(34,197,94,0.15); color: var(--color-success); }
+.ann-log-icon.dislike { background: rgba(239,68,68,0.15); color: var(--color-danger); }
+.ann-log-icon.comment { background: rgba(59,130,246,0.15); color: var(--color-primary); }
+.ann-log-icon.create { background: rgba(168,85,247,0.15); color: #a855f7; }
+
+/* ---- Scope Tabs (面板 我的/全部 切换) ---- */
+.scope-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    width: fit-content;
+}
+.scope-tab {
+    padding: 7px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+}
+.scope-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+.scope-tab.active {
+    color: var(--color-primary);
+    background: var(--bg-card);
+    border-color: var(--color-primary);
+}
+
+/* ---- Announcement Pin ---- */
+.ann-pin-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-warning);
+    background: rgba(210,153,34,0.14);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    margin-right: 8px;
+    vertical-align: middle;
+}
+.ann-pin-btn {
+    cursor: pointer;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    transition: color 0.2s;
+    user-select: none;
+    white-space: nowrap;
+}
+.ann-pin-btn:hover { color: var(--color-warning); }
+.ann-pin-btn.active { color: var(--color-warning); font-weight: 600; }
+.ann-card.pinned { border-color: rgba(210,153,34,0.5); box-shadow: 0 0 0 1px rgba(210,153,34,0.25); }
     </style>
 </head>
 <body>
@@ -1367,7 +1477,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 |  __/| |_| | (__|   <  __/| | (_) | (_) || |
 |_|    \__,_|\___|_|\_\___||_|\___/ \___/ |_|
     </pre>
-    <div class="boot-version">Version <span>v1.2</span></div>
+    <div class="boot-version">Version <span>v1.5</span></div>
     <div class="boot-loader">
         <span class="dot"></span>
         <span class="dot"></span>
@@ -1479,7 +1589,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         <div class="topbar-brand">
             <div class="brand-icon"><i class="fas fa-terminal"></i></div>
             <span class="brand-name">PocketTerm</span>
-            <span class="brand-version">v1.2</span>
+            <span class="brand-version">v1.5</span>
         </div>
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
@@ -1540,6 +1650,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     <i class="fas fa-plus-circle nav-icon"></i>
                     <span class="nav-label">创建机器人</span>
                 </div>
+                <div class="nav-item" data-view="announcements">
+                    <i class="fas fa-bullhorn nav-icon"></i>
+                    <span class="nav-label">公告</span>
+                </div>
             </div>
 
             <div class="sidebar-divider" id="adminDivider" style="display:none;"></div>
@@ -1565,6 +1679,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <div class="nav-item" data-view="admin-system">
                     <i class="fas fa-cog nav-icon"></i>
                     <span class="nav-label">系统管理</span>
+                </div>
+                <div class="nav-item" data-view="admin-ann-logs">
+                    <i class="fas fa-list-alt nav-icon"></i>
+                    <span class="nav-label">公告日志</span>
                 </div>
             </div>
         </nav>
@@ -1680,6 +1798,14 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                         <i class="fas fa-plus"></i> 创建面板
                     </button>
                 </div>
+            </div>
+            <div class="scope-tabs" id="panelScopeTabs" style="display:none;">
+                <button type="button" class="scope-tab active" data-panel-scope="mine">
+                    <i class="fas fa-user"></i> 我的面板
+                </button>
+                <button type="button" class="scope-tab" data-panel-scope="all">
+                    <i class="fas fa-globe"></i> 全部面板
+                </button>
             </div>
             <div class="panels-grid" id="panelsGrid">
                 <div class="empty-state" id="panelsEmpty">
@@ -1922,7 +2048,6 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                                     </button>
                                 </div>
                             </form>
-                        </div>
 
                         <!-- 接入点管理 -->
                         <div style="margin-top:20px;padding:16px;background:var(--bg-secondary);border-radius:8px;">
@@ -1962,6 +2087,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                                     </button>
                                 </div>
                             </div>
+                        </div>
                         </div>
                     </div>
                 </div>
@@ -2006,26 +2132,53 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     <select class="form-input filter-select" id="createBotAccountSource" style="width:100%;">
                         <option value="pool">从Cookie池选择 (未封禁)</option>
                         <option value="new">创建新4399账号</option>
+                        <option value="manual">手动输入凭证</option>
                     </select>
                 </div>
                 <div id="createBot4399Fields" style="display:none;">
+                    <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:16px;">
+                        <div style="font-size:13px;color:var(--text-secondary);">
+                            <i class="fas fa-robot"></i> 系统将自动注册一个新的4399账号
+                        </div>
+                        <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;">
+                            自动完成注册、验证码识别、登录，获取游戏凭证后可在面板设置中填写服务器编号
+                        </div>
+                    </div>
+                </div>
+                <div id="createBotManualFields" style="display:none;">
                     <div class="form-group">
-                        <label class="form-label"><i class="fas fa-user"></i> 4399用户名</label>
-                        <input type="text" class="form-input" id="createBot4399User" placeholder="4399用户名">
+                        <label class="form-label"><i class="fas fa-hashtag"></i> 服务器编号</label>
+                        <input type="text" class="form-input" id="createBotServerCode" placeholder="租赁服编号 (如 123456)">
                     </div>
                     <div class="form-group">
-                        <label class="form-label"><i class="fas fa-lock"></i> 4399密码</label>
-                        <input type="password" class="form-input" id="createBot4399Pass" placeholder="4399密码">
+                        <label class="form-label" style="display:flex;align-items:center;gap:6px;">
+                            <input type="radio" name="manualAuthType" id="manualAuth4399" value="4399" checked>
+                            <i class="fas fa-user"></i> 4399账号密码
+                        </label>
+                        <label class="form-label" style="display:flex;align-items:center;gap:6px;">
+                            <input type="radio" name="manualAuthType" id="manualAuthCookie" value="cookie">
+                            <i class="fas fa-key"></i> Cookie / sauth_json
+                        </label>
                     </div>
-                    <div class="form-group">
-                        <label class="form-label"><i class="fas fa-shield-alt"></i> 验证码</label>
-                        <div style="display:flex;gap:10px;align-items:flex-end;">
-                            <div class="form-group" style="flex:1;">
-                                <input type="text" class="form-input" id="createBotCaptcha" placeholder="输入验证码">
-                            </div>
-                            <div id="createBotCaptchaImg" style="width:120px;height:40px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--bg-input);overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                <span style="font-size:11px;color:var(--text-tertiary);">点击获取</span>
-                            </div>
+                    <div id="manual4399Fields">
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-user"></i> 4399用户名</label>
+                            <input type="text" class="form-input" id="createBotManualUser" placeholder="4399用户名">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-lock"></i> 4399密码</label>
+                            <input type="password" class="form-input" id="createBotManualPass" placeholder="4399密码">
+                        </div>
+                    </div>
+                    <div id="manualCookieFields" style="display:none;">
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-key"></i> sauth_json / Cookie</label>
+                            <textarea class="form-input" id="createBotSauthJson" placeholder="粘贴 sauth_json 或 Cookie 内容..." style="min-height:80px;resize:vertical;font-size:12px;"></textarea>
+                        </div>
+                    </div>
+                    <div style="padding:10px 12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:16px;">
+                        <div style="font-size:12px;color:var(--text-tertiary);">
+                            <i class="fas fa-info-circle"></i> 4399账号将自动通过OAuth2登录获取游戏凭证; Cookie/sauth_json可直接用于网易直连认证
                         </div>
                     </div>
                 </div>
@@ -2107,6 +2260,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                             <option value="used">已使用</option>
                             <option value="revoked">已撤销</option>
                         </select>
+                        <label class="filter-checkbox" title="勾选后将显示已撤销的卡密">
+                            <input type="checkbox" id="cardShowRevoked">
+                            <span>显示已撤销</span>
+                        </label>
                     </div>
                 </div>
                 <div class="table-wrap" style="border:none;border-radius:0;">
@@ -2323,6 +2480,26 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                             <button class="btn btn-primary btn-block" id="nv1RefreshBtn">
                                 <i class="fas fa-sync-alt"></i> 手动刷新 Key
                             </button>
+                            <hr style="border:none;border-top:1px solid var(--border-muted);margin:4px 0;">
+                            <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-primary);"><i class="fas fa-key"></i> 手动替换 Key</div>
+                            <input type="text" class="form-input" id="nv1KeyInput" placeholder="输入 SAuth Key" style="width:100%;margin-bottom:8px;font-size:12px;">
+                            <input type="text" class="form-input" id="nv1ApiTokenInput" placeholder="API Token (留空=模拟模式)" style="width:100%;margin-bottom:8px;font-size:12px;">
+                            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                                <input type="number" class="form-input" id="nv1ExpiresInput" value="7" min="0" style="width:80px;font-size:12px;">
+                                <span style="font-size:12px;color:var(--text-tertiary);">天 (0=永久)</span>
+                            </div>
+                            <button class="btn btn-success btn-block" id="nv1SetKeyBtn">
+                                <i class="fas fa-check"></i> 设置 Key
+                            </button>
+                            <hr style="border:none;border-top:1px solid var(--border-muted);margin:8px 0;">
+                            <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-primary);"><i class="fas fa-cloud"></i> NovaBuilder 自动刷新</div>
+                            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;">设置 NovaBuilder 账号密码后, Key 过期时自动登录重新生成</div>
+                            <input type="text" class="form-input" id="nv1NbUsername" placeholder="NovaBuilder 用户名" value="络空awa" style="width:100%;margin-bottom:8px;font-size:12px;">
+                            <input type="password" class="form-input" id="nv1NbPassword" placeholder="NovaBuilder 密码" value="Z184abac7308" style="width:100%;margin-bottom:8px;font-size:12px;">
+                            <input type="text" class="form-input" id="nv1NbApiKey" placeholder="已有 API Key (可选)" value="d8e00337-c5e9-4aed-8e1e-a54facc28b1f" style="width:100%;margin-bottom:8px;font-size:12px;">
+                            <button class="btn btn-primary btn-block" id="nv1SetNbBtn">
+                                <i class="fas fa-link"></i> 启用自动刷新
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -2367,6 +2544,44 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     <div id="systemStatsDetail" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
                         <div class="empty-state">
                             <i class="fas fa-chart-bar"></i>
+                            <p style="font-size:13px;">加载中...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Announcements (公告)
+             ================================================================== -->
+        <section class="view" id="view-announcements">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <h2 style="font-size:22px;font-weight:700;"><i class="fas fa-bullhorn" style="color:var(--color-primary);"></i> 公告</h2>
+                <button class="btn btn-primary" id="annCreateBtn" style="display:none;">
+                    <i class="fas fa-plus"></i> 发布公告
+                </button>
+            </div>
+            <div id="annList" style="display:flex;flex-direction:column;gap:16px;">
+                <div class="empty-state">
+                    <i class="fas fa-bullhorn"></i>
+                    <p style="font-size:13px;">加载中...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin Announcement Logs (公告日志)
+             ================================================================== -->
+        <section class="view" id="view-admin-ann-logs">
+            <h2 style="font-size:22px;font-weight:700;margin-bottom:20px;"><i class="fas fa-list-alt" style="color:var(--color-primary);"></i> 公告活动日志</h2>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-history"></i> 所有操作记录</div>
+                </div>
+                <div class="card-body">
+                    <div id="annLogsList" style="max-height:600px;overflow-y:auto;">
+                        <div class="empty-state">
+                            <i class="fas fa-list"></i>
                             <p style="font-size:13px;">加载中...</p>
                         </div>
                     </div>
@@ -2647,6 +2862,41 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
             <button class="btn btn-ghost" onclick="document.getElementById('replaceKeyModal').style.display='none';">取消</button>
             <button class="btn btn-primary" id="btnConfirmReplaceKey">
                 <i class="fas fa-check"></i> 确认替换
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Create Announcement Modal -->
+<div class="modal-overlay" id="modalCreateAnnouncement">
+    <div class="modal" style="max-width:560px;">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fas fa-bullhorn"></i> 发布公告</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <form id="createAnnouncementForm">
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label class="form-label" for="annTitle">
+                        <i class="fas fa-heading"></i> 标题
+                    </label>
+                    <input type="text" class="form-input" id="annTitle"
+                           placeholder="输入公告标题" required maxlength="100">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="annContent">
+                        <i class="fas fa-align-left"></i> 内容
+                    </label>
+                    <textarea class="form-input" id="annContent" rows="6"
+                              placeholder="输入公告内容..." required maxlength="5000"
+                              style="resize:vertical;min-height:120px;"></textarea>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>取消</button>
+            <button class="btn btn-primary" id="createAnnouncementSubmit" type="button">
+                <i class="fas fa-check"></i> 发布
             </button>
         </div>
     </div>

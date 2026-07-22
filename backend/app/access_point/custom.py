@@ -190,12 +190,20 @@ class CustomAccessPoint(AccessPoint):
         api_key = self.config.get("api_key", "")
 
         # 辅助: 将 https:// URL 转换为 wss:// (Go 的 fbauth 模式需要 WebSocket URL)
+        # 同时附加 api_key 作为查询参数 (NV1 服务器需要 API Key 验证 WebSocket 连接)
         def _to_ws_url(url: str) -> str:
             if url.startswith("https://"):
-                return "wss://" + url[len("https://"):]
-            if url.startswith("http://"):
-                return "ws://" + url[len("http://"):]
-            return url
+                ws_url = "wss://" + url[len("https://"):]
+            elif url.startswith("http://"):
+                ws_url = "ws://" + url[len("http://"):]
+            else:
+                ws_url = url
+            # 附加 api_key 查询参数
+            if api_key and "?" not in ws_url:
+                ws_url += f"?api_key={api_key}"
+            elif api_key and "api_key=" not in ws_url:
+                ws_url += f"&api_key={api_key}"
+            return ws_url
 
         # 根据认证方式选择流程
         auth_result = None
@@ -252,16 +260,18 @@ class CustomAccessPoint(AccessPoint):
                     except Exception as e:
                         self._log(f"缓存认证结果失败: {e}", "warning")
             else:
-                # 认证失败，回退到Go的fbauth模式
-                self._log("Python认证失败，回退到Go直接认证模式", "warning")
-                go_config["server_code"] = server_code
-                go_config["server_password"] = server_password
-                go_config["auth_server"] = _to_ws_url(
-                    self.config.get("auth_server", "https://nv1.nethard.pro")
-                )
-                go_config["fb_token"] = self.config.get("fb_token", "")
-                go_config["username"] = self.config.get("username", "")
-                go_config["password"] = self.config.get("password", "")
+                # Python 认证全部失败
+                # 根据失败原因给出精确的错误信息
+                if sauth_json or cookie:
+                    error_msg = "认证失败: 游戏凭证 (sauth_json/cookie) 已过期或被封禁, 请重新获取"
+                elif api_key:
+                    error_msg = "认证失败: NovaBuilder API Key 无法通过认证 (服务器要求 SafeHttp 加密), 且无游戏凭证"
+                else:
+                    error_msg = "认证失败: 无游戏账号凭证 (需要 sauth_json/cookie 或 4399账号)"
+                self._log(error_msg, "error")
+                self.info.status = AccessPointStatus.CRASHED
+                self.info.last_error = error_msg
+                return False
         elif server_code == "custom":
             # 自定义服务器 (直接 IP:Port, 无需网易认证)
             go_config["server_code"] = "custom"
@@ -271,6 +281,7 @@ class CustomAccessPoint(AccessPoint):
             go_config["auth_server"] = _to_ws_url(
                 self.config.get("auth_server", "https://nv1.nethard.pro")
             )
+            go_config["api_key"] = api_key
             go_config["fb_token"] = self.config.get("fb_token", "")
             go_config["username"] = self.config.get("username", "")
             go_config["password"] = self.config.get("password", "")
@@ -285,16 +296,15 @@ class CustomAccessPoint(AccessPoint):
                 )
                 self.info.status = AccessPointStatus.CRASHED
                 return False
-            # 无认证凭证, 使用 Go 的 fbauth 模式
-            self._log("无认证凭证, 使用Go fbauth模式", "warning")
-            go_config["server_code"] = server_code
-            go_config["server_password"] = server_password
-            go_config["auth_server"] = _to_ws_url(
-                self.config.get("auth_server", "https://nv1.nethard.pro")
+            # 无认证凭证, 也不尝试 Go fbauth (NovaBuilder 不支持 WebSocket)
+            self._log(
+                "缺少服务器编号和认证凭证。"
+                "请在创建机器人时提供服务器编号和游戏账号凭证 (4399账号密码或Cookie)。",
+                "error",
             )
-            go_config["fb_token"] = self.config.get("fb_token", "")
-            go_config["username"] = self.config.get("username", "")
-            go_config["password"] = self.config.get("password", "")
+            self.info.status = AccessPointStatus.CRASHED
+            self.info.last_error = "缺少服务器编号和认证凭证"
+            return False
 
         config_json = json.dumps(go_config) + "\n"
         return await self._launch_go_process(config_json)
@@ -346,8 +356,15 @@ class CustomAccessPoint(AccessPoint):
     ) -> Optional[dict]:
         """根据配置的认证方式执行认证。
 
+        认证回退链 (auto 模式):
+            1. cookie → 网易直连 (cookie)
+            2. sauth_json → 网易直连 (sauth_json)
+            3. 4399 账号 → 4399 OAuth2 → 网易直连
+            4. api_key → Fatalder → 失败后回退到网易直连 (自动生成 sauth_json)
+            5. 无凭证 → 网易直连 (自动生成 sauth_json, 访客模式)
+
         Args:
-            auth_method: 认证方式 (auto/direct/fatalder/cookie/fbauth)
+            auth_method: 认证方式 (auto/direct/fatalder/cookie/fbauth/4399)
             server_code: 服务器编号
             server_password: 服务器密码
 
@@ -357,28 +374,31 @@ class CustomAccessPoint(AccessPoint):
         cookie = self.config.get("cookie", "")
         sauth_json = self.config.get("sauth_json", "")
         api_key = self.config.get("api_key", "")
+        username = self.config.get("username", "")
+        password = self.config.get("password", "")
 
         # 调试日志: 确认认证凭证是否正确加载
         self._log(
             f"认证配置: auth_method={auth_method}, "
             f"cookie={'有' if cookie else '无'}({len(cookie)}字符), "
             f"sauth_json={'有' if sauth_json else '无'}({len(sauth_json)}字符), "
-            f"api_key={'有' if api_key else '无'}",
+            f"api_key={'有' if api_key else '无'}, "
+            f"4399账号={'有' if username else '无'}",
             "info",
         )
 
         # auto 模式: 自动选择最佳认证方式
         if auth_method == "auto":
-            # 优先级: cookie > sauth_json > api_key(fatalder) > fbauth
             if cookie:
                 auth_method = "cookie"
             elif sauth_json:
                 auth_method = "direct"
+            elif username and password:
+                auth_method = "4399"
             elif api_key:
                 auth_method = "fatalder"
             else:
-                # 无认证凭证，使用Go的fbauth模式
-                return None
+                auth_method = "direct"
 
         # 执行认证
         if auth_method == "direct" or auth_method == "cookie":
@@ -387,14 +407,53 @@ class CustomAccessPoint(AccessPoint):
             )
             if result:
                 return result
-            # 直连失败，尝试Fatalder
+            # 直连失败
+            if sauth_json or cookie:
+                # 已有凭证但认证失败, 说明凭证过期/无效, 不再尝试其他方式
+                self._log(
+                    "认证凭证 (sauth_json/cookie) 已失效, 请重新获取。"
+                    "可在创建机器人时选择'创建新4399账号'自动获取新凭证。",
+                    "error",
+                )
+                return None
+            # 无凭证, 尝试 Fatalder
             if api_key:
                 self._log("直连认证失败，尝试Fatalder API...", "info")
-                return await self._auth_fatalder(server_code, server_password, api_key)
+                result = await self._auth_fatalder(server_code, server_password, api_key)
+                if result:
+                    return result
             return None
 
         elif auth_method == "fatalder":
-            return await self._auth_fatalder(server_code, server_password, api_key)
+            result = await self._auth_fatalder(server_code, server_password, api_key)
+            if result:
+                return result
+            # Fatalder 失败，回退到网易直连
+            self._log(
+                "Fatalder 认证失败，回退到网易直连认证 (自动生成 sauth_json)...",
+                "warning",
+            )
+            return await self._auth_netease_direct(
+                server_code, server_password, cookie, sauth_json
+            )
+
+        elif auth_method == "4399":
+            result = await self._auth_4399_oauth2(
+                server_code, server_password, username, password
+            )
+            if result:
+                return result
+            # 4399 失败，尝试 Fatalder
+            if api_key:
+                self._log("4399 登录失败，尝试Fatalder API...", "info")
+                result = await self._auth_fatalder(server_code, server_password, api_key)
+                if result:
+                    return result
+            # 最后回退到网易直连
+            self._log("回退到网易直连认证...", "warning")
+            return await self._auth_netease_direct(
+                server_code, server_password, cookie, sauth_json
+            )
 
         else:
             # fbauth 模式 - 由Go二进制处理
@@ -540,6 +599,57 @@ class CustomAccessPoint(AccessPoint):
             logger.exception("网易直连认证失败")
             return None
 
+    async def _auth_4399_oauth2(
+        self,
+        server_code: str,
+        server_password: str,
+        username: str,
+        password: str,
+    ) -> Optional[dict]:
+        """通过 4399 OAuth2 登录获取 sauth_json, 再用网易直连认证进入游戏。
+
+        流程:
+            1. 调用 4399 OAuth2 登录 (自动 OCR 验证码)
+            2. 获取 sauth_json
+            3. 保存到 config 供后续使用
+            4. 调用 _auth_netease_direct 完成游戏认证
+        """
+        if not username or not password:
+            self._log("未配置 4399 账号密码, 跳过 4399 OAuth2 登录", "warning")
+            return None
+
+        try:
+            from ..auth.netease_direct.login_4399_oauth2 import login_4399_oauth2
+
+            self._log(f"正在通过 4399 OAuth2 登录 (用户: {username})...", "protocol")
+
+            result = await login_4399_oauth2(username, password)
+            if not result or not result.sauth_json:
+                self._log("4399 OAuth2 登录失败, 未获取到 sauth_json", "error")
+                return None
+
+            # OAuth2Result.sauth_json 是 dict, 转换为 JSON 字符串
+            sauth_str = json.dumps(result.sauth_json, ensure_ascii=False)
+            self._log("4399 OAuth2 登录成功! 正在通过网易直连认证进入游戏...", "success")
+
+            # 保存 sauth_json 到 config, 后续重连可复用
+            self.config["sauth_json"] = sauth_str
+
+            return await self._auth_netease_direct(
+                server_code, server_password, "", sauth_str
+            )
+
+        except Exception as e:
+            err_msg = str(e)
+            if "验证码" in err_msg:
+                self._log(f"4399 验证码识别失败: {err_msg}", "error")
+            elif "密码" in err_msg or "password" in err_msg.lower():
+                self._log(f"4399 账号密码错误: {err_msg}", "error")
+            else:
+                self._log(f"4399 OAuth2 登录异常: {err_msg}", "error")
+            logger.exception("4399 OAuth2 登录失败")
+            return None
+
     async def _auth_fatalder(
         self, server_code: str, server_password: str, api_key: str
     ) -> Optional[dict]:
@@ -576,7 +686,21 @@ class CustomAccessPoint(AccessPoint):
                 }
 
         except Exception as e:
-            self._log(f"Fatalder认证失败: {e}", "error")
+            err_msg = str(e)
+            if "SafeHttp" in err_msg or "unsupported envelope" in err_msg:
+                self._log(
+                    f"Fatalder认证失败: 服务器要求 SafeHttp 加密协议, "
+                    f"当前版本暂不支持此协议。错误: {err_msg}",
+                    "error",
+                )
+            elif "未知错误" in err_msg:
+                self._log(
+                    f"Fatalder认证失败: 服务器返回未知错误, "
+                    f"可能是 API Key 不被该服务器识别或已过期。错误: {err_msg}",
+                    "error",
+                )
+            else:
+                self._log(f"Fatalder认证失败: {e}", "error")
             logger.exception("Fatalder认证失败")
 
         return None

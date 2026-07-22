@@ -4,6 +4,7 @@
     - 面板到期自动检查 (每 60 秒)
     - nv1 SAuth Key 自动刷新 (每小时检查, 到期前 24 小时刷新)
     - 封号检测清理 (每 5 分钟清理过期记录)
+    - 4399 账号 sauth_json 自动刷新 (每 2 小时)
 """
 from __future__ import annotations
 
@@ -146,3 +147,57 @@ async def ban_detection_cleanup_loop() -> None:
             break
         except Exception:
             logger.exception("封号检测清理任务出错")
+
+
+# ============================================================================
+# 4399 账号 sauth_json 自动刷新
+# ============================================================================
+
+async def sauth_auto_refresh_loop() -> None:
+    """每 2 小时使用存储的 4399 账号刷新一次 sauth_json。
+
+    定期调用 :data:`app.auth.sauth_refresh.sauth_refresher.get_fresh_sauth`,
+    使内存缓存始终保持新鲜凭证, 避免机器人在启动/重连时才触发登录
+    (登录流程较慢, 提前刷新可减少机器人连接延迟)。
+    """
+    logger.info("sauth_json 自动刷新任务已启动 (间隔 7200s)")
+    while True:
+        await asyncio.sleep(7200)
+        try:
+            from app.auth.sauth_refresh import sauth_refresher
+            # 若缓存仍有效则跳过本次刷新
+            if sauth_refresher._is_cache_valid():
+                logger.debug("sauth_json 缓存仍有效, 跳过本次定时刷新")
+                continue
+
+            logger.info("定时任务: 开始刷新 sauth_json (4399 账号池)")
+            sauth_str = await sauth_refresher.get_fresh_sauth()
+
+            from app.database import get_db
+            db = await get_db()
+            if sauth_str:
+                await db.add_log(
+                    target_type="system",
+                    target_id="sauth_refresh",
+                    level="success",
+                    message="定时任务: sauth_json 自动刷新成功",
+                    details=json.dumps(
+                        sauth_refresher.get_status(), ensure_ascii=False
+                    ),
+                    created_by="system",
+                )
+                logger.info("定时任务: sauth_json 自动刷新成功")
+            else:
+                await db.add_log(
+                    target_type="system",
+                    target_id="sauth_refresh",
+                    level="error",
+                    message="定时任务: sauth_json 自动刷新失败 (无可用 4399 账号或登录均失败)",
+                    created_by="system",
+                )
+                logger.error("定时任务: sauth_json 自动刷新失败")
+        except asyncio.CancelledError:
+            logger.info("sauth_json 自动刷新任务已停止")
+            break
+        except Exception:
+            logger.exception("sauth_json 自动刷新任务出错")

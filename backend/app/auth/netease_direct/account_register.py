@@ -176,8 +176,8 @@ class CaptchaHandler:
             expected_len: 期望的验证码长度 (默认4位)
         """
         if self.use_ocr and self._ocr is not None:
-            # OCR 模式: 最多重试5次,直到识别出正确长度的结果
-            for attempt in range(5):
+            # OCR 模式: 最多重试10次
+            for attempt in range(10):
                 try:
                     result = self._ocr.classification(image_data)
                     logger.info(f"OCR 识别结果 (第{attempt+1}次): '{result}'")
@@ -189,14 +189,14 @@ class CaptchaHandler:
                     # 长度不匹配,继续循环重试
                     continue
                 except Exception as e:
-                    logger.warning(f"OCR 识别失败: {e}, 回退到人工输入")
+                    logger.warning(f"OCR 识别失败: {e}")
                     break
 
-            # OCR 识别不理想,回退到人工输入
-            logger.info("OCR 识别不理想,回退到人工输入模式")
-            return await self._manual_input(image_data)
+            # OCR 识别不理想,返回最后一次结果 (不回退到人工输入, 服务器环境无法人工输入)
+            logger.warning("OCR 识别不理想, 使用最后一次识别结果")
+            return result if result else "0000"
 
-        # 人工输入模式
+        # 人工输入模式 (仅限桌面环境)
         return await self._manual_input(image_data)
 
     async def _manual_input(self, image_data: bytes) -> str:
