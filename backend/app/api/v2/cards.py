@@ -165,15 +165,14 @@ async def list_cards(
     admin = await require_admin(request)
     db = await get_db()
 
-    # 普通管理员只能看自己的卡密; 超管可以指定 created_by 看任意人的
-    filter_created_by = admin["user_id"]
-    if admin["role"] == "superadmin" and created_by:
-        filter_created_by = created_by
-    elif admin["role"] == "superadmin" and created_by == "":
-        filter_created_by = None  # 超管看全部
+    # 普通管理员只能看自己的卡密; 超管默认看全部，传了 created_by 则按值过滤
+    if admin["role"] == "superadmin":
+        filter_created_by = created_by if created_by else None
+    else:
+        filter_created_by = admin["user_id"]
 
     cards = await db.list_cards(
-        created_by=filter_created_by if filter_created_by else None,
+        created_by=filter_created_by,
         key_type=key_type,
         status=status,
     )
@@ -311,10 +310,14 @@ async def card_creation_logs(
     admin = await require_admin(request)
     db = await get_db()
 
-    # 普通管理员看自己的创建日志; 超管可以指定 admin_id 看特定管理员的
-    filter_by = admin_id if (admin["role"] == "superadmin" and admin_id) else admin["user_id"]
-
-    logs = await db.list_logs_by_creator(filter_by, limit=limit)
+    # 普通管理员看自己的创建日志; 超管默认看全部，传了 admin_id 则按值过滤
+    if admin["role"] == "superadmin" and admin_id:
+        logs = await db.list_logs_by_creator(admin_id, limit=limit)
+    elif admin["role"] == "superadmin":
+        # 超管不指定 admin_id 时查看全部日志
+        logs = await db.list_logs(limit=limit)
+    else:
+        logs = await db.list_logs_by_creator(admin["user_id"], limit=limit)
     # 过滤出卡密创建相关日志
     card_logs = [l for l in logs if "card" in l["message"].lower() or "卡密" in l["message"]]
 

@@ -404,6 +404,28 @@ class Database:
         )).fetchall()
 
     async def delete_user(self, user_id: str) -> None:
+        """删除用户，并清理其关联数据。
+
+        - 删除用户拥有的面板 (delete_panel 会级联删除面板下的机器人)。
+        - 清理日志记录中对用户的引用 (保留日志历史，仅将 created_by 置空)。
+        - 保留卡密记录 (历史)，但清除 bound_user_id 引用。
+        """
+        # 1. 删除用户的面板 (含面板下的机器人)
+        panels = await self.list_panels_by_user(user_id)
+        for panel in panels:
+            await self.delete_panel(panel["panel_id"])
+
+        # 2. 清理日志记录中对用户的引用 (保留日志，置空 created_by)
+        await self.conn.execute(
+            "UPDATE logs SET created_by = '' WHERE created_by = ?", (user_id,)
+        )
+        # 3. 保留卡密记录 (历史)，清除 bound_user_id 引用
+        await self.conn.execute(
+            "UPDATE card_keys SET bound_user_id = '' WHERE bound_user_id = ?",
+            (user_id,),
+        )
+
+        # 4. 删除用户本身
         await self.conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
         await self.conn.commit()
 
@@ -1087,13 +1109,30 @@ class Database:
 
 # 全局单例
 _db: Optional[Database] = None
+_db_lock: Optional[asyncio.Lock] = None
 
 
 async def get_db() -> Database:
-    """获取数据库单例。"""
-    global _db
-    if _db is None:
-        _db = Database()
+    """获取数据库单例 (协程安全)。
+
+    使用模块级锁串行化初始化，确保:
+
+    - 并发调用时只有一个协程执行 ``init_db``，避免重复创建连接。
+    - 在 ``init_db`` 完成之前不会返回未初始化的实例。
+    """
+    global _db, _db_lock
+    # 快速路径: 已初始化直接返回 (无需加锁)
+    if _db is not None and _db._initialized:
+        return _db
+    if _db_lock is None:
+        _db_lock = asyncio.Lock()
+    async with _db_lock:
+        # 双重检查: 等锁期间可能已被其他协程初始化完成
+        if _db is not None and _db._initialized:
+            return _db
+        if _db is None:
+            _db = Database()
+        # init_db 内部自带幂等保护，确保初始化完成后才返回
         await _db.init_db()
     return _db
 

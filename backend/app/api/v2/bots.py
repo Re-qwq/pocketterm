@@ -53,6 +53,17 @@ async def _check_panel_access(panel_id: str, user: dict, db) -> None:
     if user["role"] == "user" and panel["user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="无权操作此面板")
 
+    # 超级管理员面板保护：面板所有者是 superadmin 时，仅允许
+    # 超级管理员或面板所有者本人操作，其他用户一律拒绝
+    owner = await db.get_user_by_id(panel["user_id"])
+    if (
+        owner is not None
+        and owner["role"] == "superadmin"
+        and user["role"] != "superadmin"
+        and panel["user_id"] != user["user_id"]
+    ):
+        raise HTTPException(status_code=403, detail="无权操作超级管理员的面板")
+
     # 检查面板是否过期
     now = time.time()
     if panel["expire_at"] is not None and panel["expire_at"] < now:
@@ -485,6 +496,8 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
     # 获取用户的第一个面板，如果没有则报错 (不允许无卡密创建面板)
     if user_panels:
         panel_id = user_panels[0]["panel_id"]
+        # 检查面板权限和过期状态
+        await _check_panel_access(panel_id, user, db)
     else:
         # 用户没有面板 - 不允许自动创建 (需要卡密)
         raise HTTPException(
@@ -779,17 +792,23 @@ async def update_bot_config(bot_id: str, req: UpdateBotConfigRequest, request: R
 
     # 合并配置
     old_config = json.loads(bot["config"]) if bot["config"] else {}
+    config_modified = False
     if req.config:
         old_config.update(req.config)
+        config_modified = True
     if req.game_version:
         old_config["game_version"] = req.game_version
+        config_modified = True
     # 同步 server_code 和 server_type 到 config, 供接入点读取
     if req.server_code is not None:
         old_config["server_code"] = req.server_code
+        config_modified = True
     if req.server_type is not None:
         old_config["server_type"] = req.server_type
+        config_modified = True
     if req.access_point_type is not None:
         old_config["access_point_type"] = req.access_point_type
+        config_modified = True
 
     config_json = json.dumps(old_config, ensure_ascii=False)
 
@@ -811,7 +830,8 @@ async def update_bot_config(bot_id: str, req: UpdateBotConfigRequest, request: R
     if req.access_point_type is not None:
         updates.append("access_point_type = ?")
         params.append(req.access_point_type)
-    if req.config is not None:
+    # 只要 config_json 被修改过 (有合并操作)，就应更新 config 列，避免丢失
+    if config_modified:
         updates.append("config = ?")
         params.append(config_json)
 

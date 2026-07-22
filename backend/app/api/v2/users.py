@@ -508,7 +508,12 @@ async def update_user_status(user_id: str, status: str, request: Request):
     target = await db.get_user_by_id(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
-    if target["role"] == "superadmin" and admin["role"] != "superadmin":
+    # 自我保护：不能修改自己的状态
+    if target["user_id"] == admin["user_id"]:
+        raise HTTPException(status_code=400, detail="不能修改自己的状态")
+    # 统一超级管理员保护：禁止对任何超级管理员修改状态
+    # (与 delete_user / update_user_role 保持一致)
+    if target["role"] == "superadmin":
         raise HTTPException(status_code=403, detail="不能操作超级管理员")
 
     await db.update_user_status(user_id, status)

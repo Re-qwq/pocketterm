@@ -126,13 +126,32 @@ class SauthRefresher:
             db = await self._get_db()
             accounts = await db.get_active_sauth_accounts()
             if not accounts:
-                logger.warning("没有可用的 4399 账号, 无法刷新 sauth_json")
-                await self._log_refresh(
-                    db, success=False,
-                    message="刷新 sauth_json 失败: 没有可用的 4399 账号",
-                    username="",
+                # 没有可用账号时，尝试将 failed 账号重置为 active 并重试一次
+                # (disabled 账号属于主动禁用，不参与重置)
+                logger.warning(
+                    "没有可用的 active 4399 账号, 尝试重置 failed 账号后重试"
                 )
-                return self._cached_sauth or None
+                all_accounts = await db.list_sauth_accounts()
+                reset_count = 0
+                for acc in all_accounts:
+                    if acc["status"] == STATUS_FAILED:
+                        await db.update_sauth_account_status(
+                            acc["id"], STATUS_ACTIVE
+                        )
+                        reset_count += 1
+                if reset_count > 0:
+                    logger.info(
+                        f"已重置 {reset_count} 个 failed 4399 账号为 active, 重试刷新"
+                    )
+                    accounts = await db.get_active_sauth_accounts()
+                if not accounts:
+                    logger.warning("没有可用的 4399 账号, 无法刷新 sauth_json")
+                    await self._log_refresh(
+                        db, success=False,
+                        message="刷新 sauth_json 失败: 没有可用的 4399 账号",
+                        username="",
+                    )
+                    return self._cached_sauth or None
 
             # 轮询尝试每个账号
             n = len(accounts)

@@ -128,6 +128,7 @@
         panelInfoText: "",            // 面板状态信息文本 (用于 consoleInfo 组合显示)
         wsManuallyClosed: false,      // 是否主动关闭 (登出/401), 主动关闭时不自动重连
         theme: 'dark',
+        botConfigDirty: false,        // 机器人配置表单是否有未保存的修改
     };
 
     /* ======================================================================
@@ -690,6 +691,18 @@
         state.currentBotId = null;
         state.panels = [];
         state.bots = [];
+        state.users = [];
+        state.cards = [];
+        state.cardStats = { total: 0, used: 0, unused: 0, revoked: 0 };
+        state.cardFilterType = "";
+        state.cardFilterStatus = "";
+        state.cardShowRevoked = false;
+        state.panelScope = "mine";
+        state.logFilterLevel = "";
+        state.panelDetail = null;
+        state.panelBot = null;
+        state.terminalHistory = [];
+        state.botConfigDirty = false;
         localStorage.removeItem(TOKEN_KEY);
         toastInfo("已退出登录");
         showAuthScreen();
@@ -777,6 +790,12 @@
      * @param {string} view - 视图名称
      */
     function switchView(view) {
+        // 客户端访问控制: 非管理员不能访问 admin-* 视图
+        if (view && view.startsWith("admin-") && !isAdmin()) {
+            toastWarn("没有权限访问该页面");
+            switchView("dashboard");
+            return;
+        }
         state.currentView = view;
 
         // 切换导航项高亮
@@ -831,11 +850,7 @@
 
     async function loadActivityLog() {
         try {
-            const res = await fetch("/api/v2/auth/activity-log", {
-                headers: { Authorization: `Bearer ${state.token}` },
-            });
-            if (!res.ok) throw new Error("Failed to load activity log");
-            const data = await res.json();
+            const data = await api("/api/v2/auth/activity-log");
             const logs = data.data || [];
             const container = $("activityLogList");
             if (logs.length === 0) {
@@ -2001,6 +2016,8 @@
                 // 没有机器人 - 清空表单准备创建
                 $("botConfigForm").reset();
             }
+            // 表单已重新加载, 清除未保存标记
+            state.botConfigDirty = false;
         } catch (_) { /* 已处理 */ }
     }
 
@@ -2050,6 +2067,7 @@
                 });
                 if (res.success) {
                     toastSuccess("配置已保存");
+                    state.botConfigDirty = false;
                     await loadPanelBot();
                 }
             } else {
@@ -2079,6 +2097,11 @@
     function resetBotConfig() {
         loadBotConfig();
         toastInfo("配置已重置");
+    }
+
+    /** 检查机器人配置表单是否有未保存的修改 */
+    function hasUnsavedConfig() {
+        return !!state.botConfigDirty;
     }
 
     /** 加载接入点状态 */
@@ -2269,8 +2292,9 @@
             const params = new URLSearchParams();
             if (state.cardFilterType) params.set("key_type", state.cardFilterType);
             if (state.cardFilterStatus) params.set("status", state.cardFilterStatus);
-            // 默认不返回已撤销卡密 (include_revoked=false), 勾选"显示已撤销"后才返回
-            params.set("include_revoked", state.cardShowRevoked ? "true" : "false");
+            // 默认不返回已撤销卡密 (include_revoked=false), 勾选"显示已撤销"或筛选 revoked 状态时才返回
+            const showRevoked = state.cardShowRevoked || state.cardFilterStatus === "revoked";
+            params.set("include_revoked", showRevoked ? "true" : "false");
             const query = params.toString() ? `?${params.toString()}` : "";
             const res = await api(`/cards${query}`);
             if (res.success) {
@@ -2527,7 +2551,7 @@
                         </select>
                     </td>
                     <td>
-                        <select class="filter-select" data-status-select="${escapeHtml(userId)}" ${isSelf ? "disabled" : ""} style="font-size:12px;padding:4px 8px;">
+                        <select class="filter-select" data-status-select="${escapeHtml(userId)}" ${(!isSuperadmin && user.role === "superadmin") || isSelf ? "disabled" : ""} style="font-size:12px;padding:4px 8px;">
                             <option value="active" ${status === "active" ? "selected" : ""}>正常</option>
                             <option value="suspended" ${status === "suspended" ? "selected" : ""}>封禁</option>
                             <option value="expired" ${status === "expired" ? "selected" : ""}>过期</option>
@@ -3192,7 +3216,12 @@
         });
 
         // ---- 面板详情 ----
-        $("backToPanels").addEventListener("click", () => switchView("panels"));
+        $("backToPanels").addEventListener("click", () => {
+            if (hasUnsavedConfig()) {
+                if (!confirm("有未保存的配置，确定要离开吗？")) return;
+            }
+            switchView("panels");
+        });
         $("btnStartBot").addEventListener("click", startBot);
         $("btnStopBot").addEventListener("click", stopBot);
         $("btnRestartBot").addEventListener("click", restartBot);
@@ -3270,6 +3299,9 @@
         // ---- 机器人配置 ----
         $("botConfigForm").addEventListener("submit", handleSaveBotConfig);
         $("resetBotConfig").addEventListener("click", resetBotConfig);
+        // 监听配置表单修改, 标记为未保存
+        $("botConfigForm").addEventListener("input", () => { state.botConfigDirty = true; });
+        $("botConfigForm").addEventListener("change", () => { state.botConfigDirty = true; });
 
         // ---- 接入点下载 ----
         $("btnDownloadNeomega").addEventListener("click", () => downloadAccessPoint("neomega"));
@@ -3589,12 +3621,6 @@
                 <span class="ann-comments-toggle" data-ann-comments-toggle="${ann.announcement_id}">查看评论</span>
             </div>
         </div>`;
-    }
-
-    /** 转义HTML */
-    function escapeHtml(str) {
-        if (!str) return "";
-        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
 
     /** 切换评论显示 */
