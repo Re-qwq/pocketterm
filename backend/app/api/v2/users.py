@@ -510,3 +510,57 @@ async def update_user_status(user_id: str, status: str, request: Request):
         created_by=admin["user_id"],
     )
     return {"success": True}
+
+
+# ============================================================================
+# 替换卡密（管理员）
+# ============================================================================
+
+class ReplaceKeyRequest(BaseModel):
+    old_key: str
+    key_type: str = "register"
+    duration_days: Optional[int] = None
+
+
+@router.post("/cards/replace")
+async def replace_card_key(req: ReplaceKeyRequest, request: Request):
+    """替换卡密（管理员）。"""
+    from .auth import require_admin
+    admin = await require_admin(request)
+    db = await get_db()
+
+    # 查找原卡密
+    old_card = await db.get_card_by_key(req.old_key.upper())
+    if not old_card:
+        raise HTTPException(status_code=404, detail="原卡密不存在")
+
+    # 创建新卡密
+    new_card_id, new_key = await db.create_card_key(
+        key_type=req.key_type,
+        duration_days=req.duration_days,
+        created_by=admin["user_id"],
+    )
+
+    # 将旧卡密标记为已替换（用 used 状态）
+    await db.conn.execute(
+        "UPDATE card_keys SET status = 'replaced' WHERE card_id = ?",
+        (old_card["card_id"],)
+    )
+    await db.conn.commit()
+
+    # 记录日志
+    await db.add_log(
+        target_type="system", target_id="cards",
+        level="warn", message=f"卡密替换: {req.old_key} -> {new_key}",
+        ip=request.client.host if request.client else "",
+        created_by=admin["user_id"],
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "old_key": req.old_key,
+            "new_key": new_key,
+            "new_card_id": new_card_id,
+        },
+    }

@@ -79,7 +79,7 @@ __all__ = ["app", "lifespan"]
 
 
 #: 应用版本号
-APP_VERSION: str = "1.0.0"
+APP_VERSION: str = "2.1.0"
 
 #: 应用入口日志器
 logger = get_logger("app")

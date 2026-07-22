@@ -222,6 +222,161 @@ async def list_bots(
     }
 
 
+# ============================================================================
+# 账号列表 (Cookie 池)
+# ============================================================================
+
+@router.get("/accounts")
+async def list_accounts(request: Request):
+    """获取可用的游戏账号列表（Cookie池）。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    # 查询所有活跃状态的账号
+    rows = await (await db.conn.execute(
+        "SELECT account_id, username, player_name, status, last_used_at "
+        "FROM accounts WHERE status = 'active' "
+        "ORDER BY last_used_at DESC NULLS LAST"
+    )).fetchall()
+
+    # 如果没有 accounts 表数据，返回空列表
+    accounts = []
+    for row in rows:
+        accounts.append({
+            "account_id": row["account_id"] if hasattr(row, "keys") else row[0],
+            "username": row["username"] if hasattr(row, "keys") else row[1],
+            "player_name": row["player_name"] if hasattr(row, "keys") else row[2],
+            "status": row["status"] if hasattr(row, "keys") else row[3],
+        })
+
+    return {"success": True, "data": accounts}
+
+
+# ============================================================================
+# 从 Cookie 池 / 新 4399 账号创建机器人
+# ============================================================================
+
+class CreateBotFromPoolRequest(BaseModel):
+    name: str
+    server_type: str = "rental"
+    server_code: str = ""
+    game_version: str = "1.21.93"
+    access_point_type: str = "neomega"
+    account_source: str = "pool"  # pool 或 new
+    username_4399: str = ""
+    password_4399: str = ""
+
+
+@router.post("/create")
+async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
+    """从Cookie池或新4399账号创建机器人。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    # 检查用户机器人数量限制
+    user_panels = await db.list_panels_by_user(user["user_id"])
+    user_bots = []
+    for p in user_panels:
+        bots = await db.list_bots_by_panel(p["panel_id"])
+        user_bots.extend(bots)
+
+    if user["role"] == "user" and len(user_bots) >= 1:
+        raise HTTPException(status_code=403, detail="普通用户最多创建1个机器人")
+
+    # 获取或创建账号
+    account_id = ""
+    if req.account_source == "pool":
+        # 从Cookie池获取一个未使用的活跃账号
+        row = await (await db.conn.execute(
+            "SELECT account_id, username FROM accounts WHERE status = 'active' "
+            "ORDER BY last_used_at DESC NULLS LAST LIMIT 1"
+        )).fetchone()
+        if row:
+            account_id = row["account_id"] if hasattr(row, "keys") else row[0]
+            # 标记账号为已使用
+            await db.conn.execute(
+                "UPDATE accounts SET last_used_at = ? WHERE account_id = ?",
+                (time.time(), account_id)
+            )
+            await db.conn.commit()
+        else:
+            raise HTTPException(status_code=400, detail="Cookie池中没有可用账号")
+    elif req.account_source == "new":
+        # 创建新4399账号 - 这里先记录，实际登录需要4399验证码流程
+        if not req.username_4399 or not req.password_4399:
+            raise HTTPException(status_code=400, detail="需要4399用户名和密码")
+        # 尝试4399登录
+        try:
+            from app.auth.netease_direct.login_4399 import login_4399_to_sauth
+            result = await login_4399_to_sauth(req.username_4399, req.password_4399)
+            if not result["success"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"4399登录失败: {result.get('message', '未知错误')}",
+                )
+            # 保存账号到数据库
+            import uuid as _uuid
+            account_id = f"a_{_uuid.uuid4().hex[:12]}"
+            await db.conn.execute(
+                "INSERT INTO accounts (account_id, username, password, player_name, status, created_at) "
+                "VALUES (?, ?, ?, ?, 'active', ?)",
+                (account_id, req.username_4399, req.password_4399, req.name, time.time())
+            )
+            await db.conn.commit()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"4399登录异常: {str(e)}")
+
+    # 获取用户的第一个面板，如果没有则创建一个
+    if user_panels:
+        panel_id = user_panels[0]["panel_id"]
+    else:
+        # 创建一个面板
+        panel_id = await db.create_panel(
+            user_id=user["user_id"],
+            name=f"{user['username']}的面板",
+        )
+
+    # 创建机器人
+    config = {
+        "server_type": req.server_type,
+        "server_code": req.server_code,
+        "game_version": req.game_version,
+        "access_point_type": req.access_point_type,
+    }
+
+    bot_id = await db.create_bot_instance(
+        panel_id=panel_id,
+        name=req.name,
+        account_id=account_id,
+        server_code=req.server_code,
+        server_type=req.server_type,
+        access_point_type=req.access_point_type,
+        config=json.dumps(config),
+    )
+
+    # 记录日志
+    await db.add_log(
+        target_type="bot", target_id=bot_id,
+        level="success", message=f"机器人创建成功: {req.name}",
+        ip=request.client.host if request.client else "",
+        created_by=user["user_id"],
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "bot_id": bot_id,
+            "name": req.name,
+            "account_id": account_id,
+            "panel_id": panel_id,
+        },
+    }
+
+
 @router.get("/{bot_id}")
 async def get_bot(bot_id: str, request: Request):
     """获取机器人实例详情。"""

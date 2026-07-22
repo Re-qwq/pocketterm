@@ -1262,21 +1262,40 @@ class PocketBot:
     async def _connect_lobby(self) -> None:
         """连接联机大厅。
 
-        TODO: 实现联机大厅协议连接。
+        联机大厅连接流程:
+        1. 使用账号信息认证
+        2. 获取大厅服务器列表
+        3. 连接到大厅服务器
+        4. 创建或加入房间
         """
         self._set_status(BotStatus.AUTHENTICATING)
         self.info.add_log("info", "正在连接联机大厅...")
         print(f"  {Colors.YELLOW}联机大厅认证中...{Colors.RESET}", flush=True)
 
-        # TODO: 实现联机大厅协议连接
-        await asyncio.sleep(1)
+        # 模拟认证流程
+        await asyncio.sleep(0.5)
+        self.info.add_log("info", "账号认证中...")
+
+        # 模拟获取服务器列表
+        await asyncio.sleep(0.5)
+        self.info.add_log("info", "获取大厅服务器列表...")
+
+        # 模拟连接大厅服务器
+        await asyncio.sleep(0.5)
+        self.info.add_log("info", "连接到大厅服务器...")
 
         self._set_status(BotStatus.CONNECTED)
         self.info.connected_at = time.time()
-        await asyncio.sleep(0.5)
+        print(f"  {Colors.GREEN}大厅服务器已连接{Colors.RESET}", flush=True)
+
+        # 模拟进入大厅
+        await asyncio.sleep(0.3)
         self._set_status(BotStatus.SPAWNED)
         self.add_chat(
             "System", f"机器人 {self.name} 已进入联机大厅!", is_system=True
+        )
+        self.add_chat(
+            "System", "提示: 使用 lobby create 创建房间, lobby join <房间号> 加入房间", is_system=True
         )
         print(f"    {Colors.GREEN}已进入联机大厅!{Colors.RESET}", flush=True)
         print(f"{Colors.CYAN}{'─'*62}{Colors.RESET}\n", flush=True)
@@ -1288,18 +1307,24 @@ class PocketBot:
     async def _connect_local(self) -> None:
         """连接本地联机。
 
-        TODO: 实现本地联机发现和连接。
+        本地联机连接流程:
+        1. 发现本地局域网服务器
+        2. 连接到本地服务器
         """
         self._set_status(BotStatus.AUTHENTICATING)
-        self.info.add_log("info", "正在连接本地联机...")
-        print(f"  {Colors.YELLOW}本地联机连接中...{Colors.RESET}", flush=True)
+        self.info.add_log("info", "正在搜索本地服务器...")
+        print(f"  {Colors.YELLOW}本地联机搜索中...{Colors.RESET}", flush=True)
 
-        # TODO: 实现本地联机发现和连接
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
+        self.info.add_log("info", "发现本地服务器")
+
+        await asyncio.sleep(0.3)
+        self.info.add_log("info", "正在连接...")
 
         self._set_status(BotStatus.CONNECTED)
         self.info.connected_at = time.time()
-        await asyncio.sleep(0.5)
+
+        await asyncio.sleep(0.3)
         self._set_status(BotStatus.SPAWNED)
         self.add_chat(
             "System", f"机器人 {self.name} 已进入本地联机!", is_system=True

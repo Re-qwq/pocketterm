@@ -919,6 +919,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     color: var(--text-tertiary);
     font-family: var(--font-mono);
 }
+.quick-cmd-item:hover { background: var(--bg-hover); }
 
 /* ---- Log Viewer ---- */
 .log-viewer {
@@ -1365,7 +1366,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 |  __/| |_| | (__|   <  __/| | (_) | (_) || |
 |_|    \__,_|\___|_|\_\___||_|\___/ \___/ |_|
     </pre>
-    <div class="boot-version">Version <span>v1.0.0</span></div>
+    <div class="boot-version">Version <span>v2.1.0</span></div>
     <div class="boot-loader">
         <span class="dot"></span>
         <span class="dot"></span>
@@ -1477,7 +1478,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         <div class="topbar-brand">
             <div class="brand-icon"><i class="fas fa-terminal"></i></div>
             <span class="brand-name">PocketTerm</span>
-            <span class="brand-version">v1.0.0</span>
+            <span class="brand-version">v2.1.0</span>
         </div>
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
@@ -1533,6 +1534,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     <i class="fas fa-robot nav-icon"></i>
                     <span class="nav-label">机器人</span>
                     <span class="nav-badge" id="badgeBots">0</span>
+                </div>
+                <div class="nav-item" data-view="create-bot">
+                    <i class="fas fa-plus-circle nav-icon"></i>
+                    <span class="nav-label">创建机器人</span>
                 </div>
             </div>
 
@@ -1700,14 +1705,18 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     </h2>
                     <div class="panel-id-text">Panel ID: <span id="detailPanelId" class="mono">-</span></div>
                 </div>
+                <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+                    <span class="status-dot" id="panelStatusDot" style="background:var(--text-tertiary);"></span>
+                    <span id="panelStatusText" style="font-size:13px;color:var(--text-secondary);">未启动</span>
+                </div>
                 <div class="panel-detail-actions">
                     <button class="btn btn-success btn-sm" id="btnStartBot">
                         <i class="fas fa-play"></i> 启动
                     </button>
-                    <button class="btn btn-danger btn-sm" id="btnStopBot">
+                    <button class="btn btn-danger btn-sm hidden" id="btnStopBot">
                         <i class="fas fa-stop"></i> 停止
                     </button>
-                    <button class="btn btn-warning btn-sm" id="btnRestartBot">
+                    <button class="btn btn-warning btn-sm hidden" id="btnRestartBot">
                         <i class="fas fa-redo"></i> 重启
                     </button>
                     <button class="btn btn-secondary btn-sm" id="btnRenewPanel">
@@ -1743,6 +1752,20 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     <div class="console-panel active" id="ctab-console">
                         <div class="terminal-toolbar">
                             <span class="toolbar-info" id="consoleInfo">等待连接...</span>
+                            <div style="position:relative;display:inline-block;">
+                                <button class="btn btn-secondary btn-sm" id="btnQuickCmd" title="快捷命令">
+                                    <i class="fas fa-bolt"></i> 快捷命令 <i class="fas fa-chevron-down" style="font-size:10px;"></i>
+                                </button>
+                                <div id="quickCmdMenu" style="display:none;position:absolute;top:100%;right:0;background:var(--bg-card);border:1px solid var(--border-default);border-radius:var(--radius-md);box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:100;min-width:200px;padding:4px 0;">
+                                    <div class="quick-cmd-item" data-cmd="help" style="padding:8px 16px;cursor:pointer;font-size:13px;">帮助 (help)</div>
+                                    <div class="quick-cmd-item" data-cmd="list" style="padding:8px 16px;cursor:pointer;font-size:13px;">在线列表 (list)</div>
+                                    <div class="quick-cmd-item" data-cmd="say" style="padding:8px 16px;cursor:pointer;font-size:13px;">发送消息 (say)</div>
+                                    <div class="quick-cmd-item" data-cmd="status" style="padding:8px 16px;cursor:pointer;font-size:13px;">机器人状态 (status)</div>
+                                    <div class="quick-cmd-item" data-cmd="reload" style="padding:8px 16px;cursor:pointer;font-size:13px;">重载插件 (reload)</div>
+                                    <div class="quick-cmd-item" data-cmd="tp" style="padding:8px 16px;cursor:pointer;font-size:13px;">传送 (tp)</div>
+                                    <div class="quick-cmd-item" data-cmd="home" style="padding:8px 16px;cursor:pointer;font-size:13px;">回主城 (home)</div>
+                                </div>
+                            </div>
                             <button class="btn btn-ghost btn-sm" id="consoleClearBtn" title="清屏">
                                 <i class="fas fa-eraser"></i>
                             </button>
@@ -1783,36 +1806,36 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 
                     <!-- Files Tab -->
                     <div class="console-panel" id="ctab-files">
-                        <div class="terminal-toolbar">
-                            <span class="toolbar-info">文件管理器</span>
-                            <button class="btn btn-ghost btn-sm" disabled>
-                                <i class="fas fa-upload"></i> 上传
-                            </button>
-                        </div>
-                        <div class="file-grid" id="fileGrid">
-                            <div class="empty-state" style="grid-column:1/-1;">
-                                <i class="fas fa-folder-open"></i>
-                                <h3>文件管理</h3>
-                                <p>文件管理功能即将上线</p>
+                        <div class="file-tab-toolbar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                            <div style="font-weight:600;font-size:14px;">文件管理</div>
+                            <div style="display:flex;gap:8px;">
+                                <input type="file" id="fileUploadInput" style="display:none;" multiple>
+                                <button class="btn btn-primary btn-sm" id="btnUploadFile">
+                                    <i class="fas fa-upload"></i> 上传文件
+                                </button>
+                                <button class="btn btn-secondary btn-sm" id="btnRefreshFiles">
+                                    <i class="fas fa-sync-alt"></i> 刷新
+                                </button>
                             </div>
                         </div>
+                        <div id="fileGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;"></div>
                     </div>
 
                     <!-- Plugins Tab -->
                     <div class="console-panel" id="ctab-plugins">
-                        <div class="terminal-toolbar">
-                            <span class="toolbar-info">插件列表</span>
-                            <button class="btn btn-ghost btn-sm" disabled>
-                                <i class="fas fa-plus"></i> 安装插件
-                            </button>
-                        </div>
-                        <div class="plugin-list" id="pluginList">
-                            <div class="empty-state">
-                                <i class="fas fa-puzzle-piece"></i>
-                                <h3>暂无插件</h3>
-                                <p>插件管理功能即将上线</p>
+                        <div class="file-tab-toolbar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                            <div style="font-weight:600;font-size:14px;">插件管理</div>
+                            <div style="display:flex;gap:8px;">
+                                <input type="file" id="pluginUploadInput" style="display:none;" accept=".py,.zip,.jar">
+                                <button class="btn btn-primary btn-sm" id="btnUploadPlugin">
+                                    <i class="fas fa-plus"></i> 安装插件
+                                </button>
+                                <button class="btn btn-secondary btn-sm" id="btnRefreshPlugins">
+                                    <i class="fas fa-sync-alt"></i> 刷新
+                                </button>
                             </div>
                         </div>
+                        <div id="pluginList" style="display:flex;flex-direction:column;gap:8px;"></div>
                     </div>
 
                     <!-- Settings Tab -->
@@ -1847,7 +1870,25 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                                         </label>
                                         <select class="form-input filter-select" id="botConfigServerType" style="width:100%;">
                                             <option value="rental">租赁服 (Rental)</option>
+                                            <option value="lobby">联机大厅 (Lobby)</option>
                                             <option value="private">私人服 (Private)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="botConfigGameVersion">
+                                            <i class="fas fa-code-branch"></i> 游戏版本
+                                        </label>
+                                        <select class="form-input filter-select" id="botConfigGameVersion" style="width:100%;">
+                                            <option value="1.21.93">1.21.93 (最新)</option>
+                                            <option value="1.21.90">1.21.90</option>
+                                            <option value="1.21.80">1.21.80</option>
+                                            <option value="1.21.70">1.21.70</option>
+                                            <option value="1.21.60">1.21.60 (3.9兼容)</option>
+                                            <option value="1.21.50">1.21.50 (3.8兼容)</option>
+                                            <option value="1.21.40">1.21.40</option>
+                                            <option value="1.20.80">1.20.80</option>
+                                            <option value="3.9">3.9 (Community-Bot适配)</option>
+                                            <option value="3.8">3.8</option>
                                         </select>
                                     </div>
                                     <div class="form-group full">
@@ -1858,6 +1899,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                                             <option value="neomega">NeoOmega</option>
                                             <option value="fateark">FateArk</option>
                                             <option value="custom">自定义</option>
+                                            <option value="community_bot">Community-Bot (3.9适配)</option>
                                         </select>
                                     </div>
                                     <div class="form-group full">
@@ -1907,6 +1949,75 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
             </div>
         </section>
 
+        <!-- View: Create Bot -->
+        <section class="view" id="view-create-bot">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
+                <button class="btn btn-ghost btn-sm" onclick="switchView('bots')">
+                    <i class="fas fa-arrow-left"></i> 返回
+                </button>
+                <h3 style="margin:0;"><i class="fas fa-plus-circle"></i> 创建机器人</h3>
+            </div>
+            <div class="auth-card" style="max-width:500px;margin:0 auto;">
+                <div class="form-group">
+                    <label class="form-label"><i class="fas fa-tag"></i> 机器人名称</label>
+                    <input type="text" class="form-input" id="createBotName" placeholder="给机器人起个名字" maxlength="20">
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><i class="fas fa-user-shield"></i> 账号来源</label>
+                    <select class="form-input filter-select" id="createBotAccountSource" style="width:100%;">
+                        <option value="pool">从Cookie池选择 (未封禁)</option>
+                        <option value="new">创建新4399账号</option>
+                    </select>
+                </div>
+                <div class="form-group" id="createBotAccountGroup" style="display:none;">
+                    <label class="form-label"><i class="fas fa-cookie"></i> 4399用户名</label>
+                    <input type="text" class="form-input" id="createBot4399User" placeholder="4399用户名">
+                </div>
+                <div class="form-group" id="createBot4399PassGroup" style="display:none;">
+                    <label class="form-label"><i class="fas fa-lock"></i> 4399密码</label>
+                    <input type="password" class="form-input" id="createBot4399Pass" placeholder="4399密码">
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><i class="fas fa-network-wired"></i> 服务器类型</label>
+                    <select class="form-input filter-select" id="createBotServerType" style="width:100%;">
+                        <option value="rental">租赁服 (Rental)</option>
+                        <option value="lobby">联机大厅 (Lobby)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><i class="fas fa-server"></i> 服务器号/房间号</label>
+                    <input type="text" class="form-input" id="createBotServerCode" placeholder="如: 123456">
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><i class="fas fa-code-branch"></i> 游戏版本</label>
+                    <select class="form-input filter-select" id="createBotGameVersion" style="width:100%;">
+                        <option value="1.21.93">1.21.93 (最新)</option>
+                        <option value="3.9">3.9 (Community-Bot适配)</option>
+                        <option value="3.8">3.8</option>
+                        <option value="1.21.60">1.21.60</option>
+                        <option value="1.21.50">1.21.50</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"><i class="fas fa-plug"></i> 接入点</label>
+                    <select class="form-input filter-select" id="createBotAccessPoint" style="width:100%;">
+                        <option value="neomega">NeoOmega</option>
+                        <option value="fateark">FateArk</option>
+                        <option value="community_bot">Community-Bot (3.9适配)</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+                <div style="margin-top:20px;">
+                    <button class="btn btn-primary" id="btnCreateBot" style="width:100%;">
+                        <i class="fas fa-plus"></i> 创建机器人
+                    </button>
+                </div>
+                <div id="createBotHint" style="margin-top:12px;font-size:12px;color:var(--text-tertiary);text-align:center;">
+                    普通用户最多创建1个机器人，管理员可创建多个
+                </div>
+            </div>
+        </section>
+
         <!-- ==================================================================
              View: Admin - Card Keys
              ================================================================== -->
@@ -1919,6 +2030,9 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <div class="page-actions">
                     <button class="btn btn-secondary btn-sm" id="refreshCards">
                         <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                    <button class="btn btn-warning btn-sm" id="btnReplaceKey">
+                        <i class="fas fa-sync-alt"></i> 替换Key
                     </button>
                     <button class="btn btn-primary" id="btnCreateCard">
                         <i class="fas fa-plus"></i> 生成卡密
@@ -2470,6 +2584,39 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
             <button class="btn btn-secondary" data-modal-close>取消</button>
             <button class="btn btn-primary" type="button" id="changePwdSubmit">
                 <i class="fas fa-check"></i> 确认修改
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Replace Key Modal -->
+<div class="modal-overlay" id="replaceKeyModal" style="display:none;">
+    <div class="modal" style="max-width:450px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-sync-alt"></i> 替换卡密</h3>
+            <button class="modal-close" onclick="document.getElementById('replaceKeyModal').style.display='none';">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label class="form-label">原卡密</label>
+                <input type="text" class="form-input" id="replaceKeyOld" placeholder="输入要替换的卡密">
+            </div>
+            <div class="form-group">
+                <label class="form-label">卡密类型</label>
+                <select class="form-input filter-select" id="replaceKeyType" style="width:100%;">
+                    <option value="register">注册卡密</option>
+                    <option value="panel">面板卡密</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">有效期天数 (留空=永久)</label>
+                <input type="number" class="form-input" id="replaceKeyDuration" placeholder="如: 30">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="document.getElementById('replaceKeyModal').style.display='none';">取消</button>
+            <button class="btn btn-primary" id="btnConfirmReplaceKey">
+                <i class="fas fa-check"></i> 确认替换
             </button>
         </div>
     </div>

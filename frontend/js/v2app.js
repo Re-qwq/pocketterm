@@ -143,7 +143,10 @@
         const url = path.startsWith("http") ? path : API_BASE + path;
 
         // 构建请求头
-        const headers = { "Content-Type": "application/json" };
+        const headers = {};
+        if (!(options.body instanceof FormData)) {
+            headers["Content-Type"] = "application/json";
+        }
         if (state.token) headers["Authorization"] = "Bearer " + state.token;
         if (options.headers) Object.assign(headers, options.headers);
 
@@ -836,6 +839,177 @@
         }
     }
 
+    /* ======================================================================
+       文件管理 / 插件管理
+       ====================================================================== */
+
+    async function loadPanelFiles() {
+        if (!state.currentPanelId) return;
+        const pluginId = state.currentPanelId;
+        try {
+            const res = await api(`/files/${pluginId}`, { method: "GET" });
+            const files = res.data || res.files || [];
+            const container = $("fileGrid");
+            if (!container) return;
+            if (files.length === 0) {
+                container.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><i class="fas fa-folder-open"></i><h3>暂无文件</h3><p>上传建筑文件、配置文件等</p></div>`;
+                return;
+            }
+            container.innerHTML = files.map(f => {
+                const icon = f.name.endsWith('.bdx') ? 'fa-cube' : f.name.endsWith('.schematic') ? 'fa-cubes' : f.name.endsWith('.nbt') ? 'fa-cube' : f.name.endsWith('.mcstructure') ? 'fa-layer-group' : f.name.endsWith('.json') ? 'fa-file-code' : 'fa-file';
+                return `<div class="card" style="padding:12px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <i class="fas ${icon}" style="font-size:20px;color:var(--color-primary);"></i>
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</div>
+                            <div style="font-size:11px;color:var(--text-tertiary);">${formatFileSize(f.size)}</div>
+                        </div>
+                        <button class="btn btn-danger btn-sm" onclick="deletePanelFile('${pluginId}','${f.name}')" title="删除"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>`;
+            }).join("");
+        } catch (err) {
+            console.error("Load files error:", err);
+            const container = $("fileGrid");
+            if (container) container.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><i class="fas fa-exclamation-triangle"></i><h3>加载失败</h3><p>${err.message || '未知错误'}</p></div>`;
+        }
+    }
+
+    function formatFileSize(bytes) {
+        if (!bytes) return '-';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let i = 0;
+        while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+        return bytes.toFixed(1) + ' ' + units[i];
+    }
+
+    async function handleFileUpload(event) {
+        const files = event.target.files;
+        if (!files || files.length === 0) return;
+        if (!state.currentPanelId) return;
+        const pluginId = state.currentPanelId;
+        for (const file of files) {
+            const formData = new FormData();
+            formData.append("file", file);
+            try {
+                appendTerminal(`正在上传文件: ${file.name}...`, "system");
+                const res = await api(`/files/${pluginId}/upload`, { method: "POST", body: formData });
+                if (res.success !== false) {
+                    appendTerminal(`文件上传成功: ${file.name}`, "success");
+                    toastSuccess(`文件 ${file.name} 上传成功`);
+                } else {
+                    appendTerminal(`文件上传失败: ${file.name}`, "error");
+                    toastError(`文件 ${file.name} 上传失败`);
+                }
+            } catch (err) {
+                appendTerminal(`文件上传出错: ${file.name} - ${err.message}`, "error");
+                toastError(`上传失败: ${err.message}`);
+            }
+        }
+        event.target.value = "";
+        loadPanelFiles();
+    }
+
+    async function deletePanelFile(pluginId, filename) {
+        if (!confirm(`确定要删除文件 ${filename} 吗？`)) return;
+        try {
+            const res = await api(`/files/${pluginId}/${encodeURIComponent(filename)}`, { method: "DELETE" });
+            if (res.success !== false) {
+                toastSuccess("文件已删除");
+                loadPanelFiles();
+            }
+        } catch (err) {
+            toastError(`删除失败: ${err.message}`);
+        }
+    }
+
+    async function loadPanelPlugins() {
+        try {
+            const res = await api("/plugins", { method: "GET" });
+            const plugins = res.data || res.plugins || [];
+            const container = $("pluginList");
+            if (!container) return;
+            if (plugins.length === 0) {
+                container.innerHTML = `<div class="empty-state"><i class="fas fa-puzzle-piece"></i><h3>暂无插件</h3><p>上传 Python/Go/Java 插件</p></div>`;
+                return;
+            }
+            container.innerHTML = plugins.map(p => {
+                const statusColor = p.enabled ? 'var(--color-success)' : 'var(--text-tertiary)';
+                const statusText = p.enabled ? '已启用' : '已禁用';
+                const toggleBtn = p.enabled
+                    ? `<button class="btn btn-warning btn-sm" onclick="togglePlugin('${p.plugin_id}','disable')"><i class="fas fa-pause"></i></button>`
+                    : `<button class="btn btn-success btn-sm" onclick="togglePlugin('${p.plugin_id}','enable')"><i class="fas fa-play"></i></button>`;
+                return `<div class="card" style="padding:12px;display:flex;align-items:center;gap:12px;">
+                    <i class="fas fa-puzzle-piece" style="font-size:20px;color:var(--color-primary);"></i>
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-weight:500;">${p.name || p.plugin_id}</div>
+                        <div style="font-size:11px;color:var(--text-tertiary);">${p.language || 'python'} · <span style="color:${statusColor}">${statusText}</span></div>
+                    </div>
+                    ${toggleBtn}
+                    <button class="btn btn-secondary btn-sm" onclick="reloadPlugin('${p.plugin_id}')" title="重载"><i class="fas fa-redo"></i></button>
+                </div>`;
+            }).join("");
+        } catch (err) {
+            const container = $("pluginList");
+            if (container) container.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><h3>加载失败</h3><p>${err.message || '未知错误'}</p></div>`;
+        }
+    }
+
+    async function handlePluginUpload(event) {
+        const files = event.target.files;
+        if (!files || files.length === 0) return;
+        if (!state.currentPanelId) return;
+        const pluginId = state.currentPanelId;
+        for (const file of files) {
+            const formData = new FormData();
+            formData.append("file", file);
+            try {
+                appendTerminal(`正在安装插件: ${file.name}...`, "system");
+                const res = await api(`/files/${pluginId}/upload`, { method: "POST", body: formData });
+                if (res.success !== false) {
+                    appendTerminal(`插件安装成功: ${file.name}`, "success");
+                    toastSuccess(`插件 ${file.name} 安装成功`);
+                } else {
+                    appendTerminal(`插件安装失败: ${file.name}`, "error");
+                }
+            } catch (err) {
+                appendTerminal(`插件安装出错: ${err.message}`, "error");
+                toastError(`安装失败: ${err.message}`);
+            }
+        }
+        event.target.value = "";
+        loadPanelPlugins();
+    }
+
+    async function togglePlugin(pluginId, action) {
+        try {
+            const res = await api(`/plugins/${pluginId}/${action}`, { method: "POST" });
+            if (res.success !== false) {
+                toastSuccess(action === 'enable' ? '插件已启用' : '插件已禁用');
+                loadPanelPlugins();
+            }
+        } catch (err) {
+            toastError(`操作失败: ${err.message}`);
+        }
+    }
+
+    async function reloadPlugin(pluginId) {
+        try {
+            const res = await api(`/plugins/${pluginId}/reload`, { method: "POST" });
+            if (res.success !== false) {
+                toastSuccess("插件已重载");
+            }
+        } catch (err) {
+            toastError(`重载失败: ${err.message}`);
+        }
+    }
+
+    // 暴露给内联 onclick 使用的全局函数
+    window.deletePanelFile = deletePanelFile;
+    window.togglePlugin = togglePlugin;
+    window.reloadPlugin = reloadPlugin;
+    window.switchView = switchView;
+
     /**
      * 切换控制台 Tab
      * @param {string} tab - "console"/"logs"/"files"/"plugins"/"settings"
@@ -852,6 +1026,8 @@
         // 按需加载数据
         if (tab === "logs") loadPanelLogs();
         if (tab === "settings") loadBotConfig();
+        if (tab === "files") loadPanelFiles();
+        if (tab === "plugins") loadPanelPlugins();
     }
 
     /* ======================================================================
@@ -1233,10 +1409,37 @@
                 state.currentBotId = state.panelBot.bot_id || state.panelBot.id;
                 appendTerminal(`机器人已加载: ${state.panelBot.name || "未命名"}`, "success");
                 appendTerminal(`机器人状态: ${state.panelBot.status || "unknown"}`, "info");
+                // 根据机器人状态切换按钮
+                const startBtn = $("btnStartBot");
+                const stopBtn = $("btnStopBot");
+                const restartBtn = $("btnRestartBot");
+                if (state.panelBot && state.panelBot.status === "running") {
+                    startBtn.classList.add("hidden");
+                    stopBtn.classList.remove("hidden");
+                    restartBtn.classList.remove("hidden");
+                } else {
+                    startBtn.classList.remove("hidden");
+                    stopBtn.classList.add("hidden");
+                    restartBtn.classList.add("hidden");
+                }
             } else {
                 state.panelBot = null;
                 state.currentBotId = null;
                 appendTerminal('该面板尚未创建机器人，请在「设置」中配置并创建', "warn");
+            }
+            // 更新面板状态指示器
+            const statusDot = $("panelStatusDot");
+            const statusText = $("panelStatusText");
+            if (statusDot && statusText) {
+                if (state.panelBot && state.panelBot.status === "running") {
+                    statusDot.style.background = "#22c55e";
+                    statusText.textContent = "运行中";
+                    statusText.style.color = "#22c55e";
+                } else {
+                    statusDot.style.background = "var(--text-tertiary)";
+                    statusText.textContent = "未启动";
+                    statusText.style.color = "var(--text-secondary)";
+                }
             }
         } catch (_) { /* 已处理 */ }
     }
@@ -1617,6 +1820,10 @@
             if (res.success) {
                 appendTerminal("机器人启动成功", "success");
                 toastSuccess("机器人已启动");
+                // 成功后隐藏启动按钮，显示停止按钮
+                $("btnStartBot").classList.add("hidden");
+                $("btnStopBot").classList.remove("hidden");
+                $("btnRestartBot").classList.remove("hidden");
                 await loadPanelBot();
             }
         } catch (_) { /* 已处理 */ }
@@ -1631,6 +1838,10 @@
             if (res.success) {
                 appendTerminal("机器人已停止", "success");
                 toastSuccess("机器人已停止");
+                // 成功后显示启动按钮，隐藏停止按钮
+                $("btnStartBot").classList.remove("hidden");
+                $("btnStopBot").classList.add("hidden");
+                $("btnRestartBot").classList.add("hidden");
                 await loadPanelBot();
             }
         } catch (_) { /* 已处理 */ }
@@ -1694,6 +1905,9 @@
                 $("botConfigServerCode").value = bot.server_code || "";
                 $("botConfigServerType").value = bot.server_type || "rental";
                 $("botConfigAccessPoint").value = bot.access_point || "neomega";
+                const gameVersionEl = $("botConfigGameVersion");
+                if (gameVersionEl && bot.game_version) gameVersionEl.value = bot.game_version;
+                else if (gameVersionEl) gameVersionEl.value = "1.21.93";
                 $("botConfigExtra").value = bot.extra_config
                     ? (typeof bot.extra_config === "string"
                         ? bot.extra_config
@@ -1713,6 +1927,7 @@
         const accountId = $("botConfigAccount").value.trim();
         const serverCode = $("botConfigServerCode").value.trim();
         const serverType = $("botConfigServerType").value;
+        const game_version = $("botConfigGameVersion")?.value || "1.21.93";
         const accessPoint = $("botConfigAccessPoint").value;
         const extraRaw = $("botConfigExtra").value.trim();
 
@@ -1737,6 +1952,7 @@
             account_id: accountId,
             server_code: serverCode,
             server_type: serverType,
+            game_version,
             access_point: accessPoint,
             ...extra,
         };
@@ -2544,6 +2760,124 @@
        20. 事件绑定
        ====================================================================== */
 
+    /** 加载可用的Cookie池账号 */
+    async function loadCookiePoolAccounts() {
+        try {
+            const res = await api("/bots/accounts?status=active");
+            if (res.success && res.data) {
+                return res.data;
+            }
+            return [];
+        } catch (_) {
+            return [];
+        }
+    }
+
+    /** 切换创建机器人的账号来源 */
+    function toggleCreateBotAccountSource() {
+        const source = $("createBotAccountSource");
+        if (!source) return;
+        const isPool = source.value === "pool";
+        $("createBotAccountGroup").style.display = isPool ? "none" : "block";
+        $("createBot4399PassGroup").style.display = isPool ? "none" : "block";
+    }
+
+    /** 创建机器人 */
+    async function handleCreateBot() {
+        const name = $("createBotName").value.trim();
+        if (!name) {
+            toastError("请输入机器人名称");
+            return;
+        }
+        const accountSource = $("createBotAccountSource").value;
+        const serverType = $("createBotServerType").value;
+        const serverCode = $("createBotServerCode").value.trim();
+        const gameVersion = $("createBotGameVersion").value;
+        const accessPoint = $("createBotAccessPoint").value;
+
+        const payload = {
+            name: name,
+            server_type: serverType,
+            server_code: serverCode,
+            game_version: gameVersion,
+            access_point_type: accessPoint,
+            account_source: accountSource,
+        };
+
+        if (accountSource === "new") {
+            payload.username_4399 = $("createBot4399User").value.trim();
+            payload.password_4399 = $("createBot4399Pass").value.trim();
+            if (!payload.username_4399 || !payload.password_4399) {
+                toastError("请填写4399账号密码");
+                return;
+            }
+        }
+
+        try {
+            const btn = $("btnCreateBot");
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 创建中...';
+
+            const res = await api("/bots/create", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            });
+
+            if (res.success) {
+                toastSuccess("机器人创建成功！");
+                // 清空表单
+                $("createBotName").value = "";
+                $("createBotServerCode").value = "";
+                // 跳转到机器人列表
+                switchView("bots");
+                await loadBots();
+            } else {
+                toastError(res.detail || "创建失败");
+            }
+        } catch (e) {
+            toastError("创建失败: " + (e.message || "未知错误"));
+        } finally {
+            const btn = $("btnCreateBot");
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-plus"></i> 创建机器人';
+        }
+    }
+
+    /** 替换卡密 */
+    async function handleReplaceKey() {
+        const oldKey = $("replaceKeyOld").value.trim();
+        if (!oldKey) {
+            toastError("请输入要替换的原卡密");
+            return;
+        }
+        const keyType = $("replaceKeyType").value;
+        const duration = $("replaceKeyDuration").value;
+
+        const payload = {
+            old_key: oldKey,
+            key_type: keyType,
+            duration_days: duration ? parseInt(duration) : null,
+        };
+
+        try {
+            const res = await api("/auth/cards/replace", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            });
+            if (res.success) {
+                toastSuccess("卡密替换成功！新卡密: " + (res.data?.new_key || ""));
+                $("replaceKeyModal").style.display = "none";
+                $("replaceKeyOld").value = "";
+                $("replaceKeyDuration").value = "";
+                await loadCards();
+            } else {
+                toastError(res.detail || "替换失败");
+            }
+        } catch (e) {
+            toastError("替换失败: " + (e.message || "未知错误"));
+        }
+    }
+
     function bindEvents() {
         // ---- 认证 Tab 切换 ----
         $("tabLogin").addEventListener("click", () => switchAuthTab("login"));
@@ -2675,6 +3009,16 @@
                 );
             }
         });
+
+        // ---- 创建机器人 ----
+        $("btnCreateBot").addEventListener("click", handleCreateBot);
+        $("createBotAccountSource").addEventListener("change", toggleCreateBotAccountSource);
+
+        // ---- 替换Key ----
+        $("btnReplaceKey").addEventListener("click", () => {
+            $("replaceKeyModal").style.display = "flex";
+        });
+        $("btnConfirmReplaceKey").addEventListener("click", handleReplaceKey);
 
         // ---- 控制台 Tab ----
         $$(".console-tab").forEach((tab) => {
@@ -2810,6 +3154,47 @@
                 cb();
             }
         });
+
+        // ---- 文件管理 ----
+        const fileUploadInput = $("fileUploadInput");
+        const btnUploadFile = $("btnUploadFile");
+        if (btnUploadFile) btnUploadFile.addEventListener("click", () => fileUploadInput && fileUploadInput.click());
+        if (fileUploadInput) fileUploadInput.addEventListener("change", (e) => handleFileUpload(e));
+
+        const btnRefreshFiles = $("btnRefreshFiles");
+        if (btnRefreshFiles) btnRefreshFiles.addEventListener("click", () => loadPanelFiles());
+
+        // ---- 插件管理 ----
+        const pluginUploadInput = $("pluginUploadInput");
+        const btnUploadPlugin = $("btnUploadPlugin");
+        if (btnUploadPlugin) btnUploadPlugin.addEventListener("click", () => pluginUploadInput && pluginUploadInput.click());
+        if (pluginUploadInput) pluginUploadInput.addEventListener("change", (e) => handlePluginUpload(e));
+
+        const btnRefreshPlugins = $("btnRefreshPlugins");
+        if (btnRefreshPlugins) btnRefreshPlugins.addEventListener("click", () => loadPanelPlugins());
+
+        // ---- 快捷命令菜单 ----
+        const btnQuickCmd = $("btnQuickCmd");
+        const quickCmdMenu = $("quickCmdMenu");
+        if (btnQuickCmd) btnQuickCmd.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (quickCmdMenu) quickCmdMenu.style.display = quickCmdMenu.style.display === "none" ? "block" : "none";
+        });
+        if (quickCmdMenu) {
+            quickCmdMenu.addEventListener("click", (e) => {
+                const item = e.target.closest(".quick-cmd-item");
+                if (item) {
+                    const cmd = item.dataset.cmd;
+                    const input = $("terminalInput");
+                    if (input) {
+                        input.value = cmd + " ";
+                        input.focus();
+                    }
+                    quickCmdMenu.style.display = "none";
+                }
+            });
+            document.addEventListener("click", () => { quickCmdMenu.style.display = "none"; });
+        }
 
         // ---- 欢迎时间定时刷新 ----
         setInterval(updateWelcomeTime, 1000);
