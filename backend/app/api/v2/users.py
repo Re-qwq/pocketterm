@@ -227,8 +227,71 @@ async def login(req: LoginRequest, request: Request, response: Response):
 @router.post("/logout")
 async def logout(request: Request, response: Response):
     """用户登出。"""
+    # 记录登出日志
+    from .auth import get_current_user
+    user = await get_current_user(request)
+    if user:
+        client_ip = request.client.host if request.client else ""
+        db = await get_db()
+        await db.add_log(
+            target_type="user", target_id=user["user_id"],
+            level="info", message=f"用户登出: {user['username']}",
+            ip=client_ip, created_by=user["user_id"],
+        )
     response.delete_cookie("pocketterm_token")
     return {"success": True, "message": "已登出"}
+
+
+# ============================================================================
+# 活动日志 (管理员)
+# ============================================================================
+
+@router.get("/activity-log")
+async def activity_log(request: Request, limit: int = 200):
+    """查看用户活动日志（登录、注册、登出）。管理员权限。"""
+    from .auth import require_admin
+    admin = await require_admin(request)
+    db = await get_db()
+
+    # 查询所有用户相关日志
+    logs = await db.list_logs(target_type="user", limit=limit)
+
+    # 解析每条日志，提取用户名和操作类型
+    result = []
+    for l in logs:
+        msg = l["message"] or ""
+        action = "other"
+        action_desc = msg
+        username = ""
+
+        if "登录成功" in msg or "用户登录" in msg:
+            action = "login"
+            # 尝试从消息中提取用户名
+            parts = msg.split(":")
+            if len(parts) > 1:
+                username = parts[-1].strip()
+        elif "注册" in msg:
+            action = "register"
+            parts = msg.split(":")
+            if len(parts) > 1:
+                username = parts[-1].strip()
+        elif "登出" in msg:
+            action = "logout"
+            parts = msg.split(":")
+            if len(parts) > 1:
+                username = parts[-1].strip()
+
+        result.append({
+            "log_id": l["log_id"],
+            "action": action,
+            "action_desc": action_desc,
+            "username": username,
+            "ip": l["ip"],
+            "timestamp": l["created_at"],
+            "level": l["level"],
+        })
+
+    return {"success": True, "data": result}
 
 
 # ============================================================================

@@ -125,6 +125,7 @@
         wsStatusText: "未连接",        // 当前 WS 状态文本 (用于 UI 显示)
         panelInfoText: "",            // 面板状态信息文本 (用于 consoleInfo 组合显示)
         wsManuallyClosed: false,      // 是否主动关闭 (登出/401), 主动关闭时不自动重连
+        theme: 'dark',
     };
 
     /* ======================================================================
@@ -458,6 +459,10 @@
         // 绑定所有事件
         bindEvents();
 
+        // Load saved theme
+        const savedTheme = localStorage.getItem('pocketterm-theme') || 'dark';
+        applyTheme(savedTheme);
+
         // 启动序列：显示 boot 屏幕 2 秒
         await sleep(2000);
 
@@ -474,6 +479,20 @@
             // 未登录 - 显示认证界面
             showAuthScreen();
         }
+    }
+
+    function applyTheme(theme) {
+        state.theme = theme;
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('pocketterm-theme', theme);
+        const icon = document.querySelector('#themeToggle i');
+        if (icon) {
+            icon.className = theme === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
+        }
+    }
+
+    function toggleTheme() {
+        applyTheme(state.theme === 'dark' ? 'light' : 'dark');
     }
 
     /** Promise 延时工具 */
@@ -778,9 +797,42 @@
             case "admin-logs":
                 loadSystemLogs();
                 break;
+            case "admin-activity":
+                loadActivityLog();
+                break;
             case "admin-system":
                 loadSystemAdmin();
                 break;
+        }
+    }
+
+    async function loadActivityLog() {
+        try {
+            const res = await fetch("/api/v2/auth/activity-log", {
+                headers: { Authorization: `Bearer ${state.token}` },
+            });
+            if (!res.ok) throw new Error("Failed to load activity log");
+            const data = await res.json();
+            const logs = data.data || [];
+            const container = $("activityLogList");
+            if (logs.length === 0) {
+                container.innerHTML = `<div class="empty-state"><i class="fas fa-history"></i><h3>暂无活动记录</h3><p>用户登录、注册等活动记录将显示在这里</p></div>`;
+                return;
+            }
+            container.innerHTML = logs.map(log => {
+                const icon = log.action === 'login' ? 'fa-sign-in-alt' : log.action === 'register' ? 'fa-user-plus' : log.action === 'logout' ? 'fa-sign-out-alt' : 'fa-info-circle';
+                const color = log.action === 'login' ? 'var(--color-success)' : log.action === 'register' ? 'var(--color-primary)' : log.action === 'logout' ? 'var(--text-secondary)' : 'var(--text-tertiary)';
+                return `<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border-muted);">
+                <div style="width:36px;height:36px;border-radius:50%;background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;color:${color};font-size:14px;"><i class="fas ${icon}"></i></div>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:500;color:var(--text-primary);">${log.username || 'Unknown'} - ${log.action_desc || log.action}</div>
+                    <div style="font-size:12px;color:var(--text-tertiary);">${new Date(log.timestamp * 1000).toLocaleString('zh-CN')}</div>
+                </div>
+                <div style="font-size:11px;color:var(--text-tertiary);background:var(--bg-elevated);padding:2px 8px;border-radius:var(--radius-sm);">${log.ip || '-'}</div>
+            </div>`;
+            }).join("");
+        } catch (err) {
+            console.error("Load activity log error:", err);
         }
     }
 
@@ -2510,6 +2562,8 @@
 
         // ---- 顶部栏 ----
         $("menuToggle").addEventListener("click", toggleSidebar);
+        const themeToggle = $("themeToggle");
+        if (themeToggle) themeToggle.addEventListener("click", toggleTheme);
         $("topbarUser").addEventListener("click", (e) => {
             e.stopPropagation();
             toggleUserMenu();
