@@ -32,6 +32,7 @@ async def list_access_points(
     available = ap_manager.list_available()
     recommended = ap_manager.auto_select()
     data = {
+        "available": available,
         "access_points": available,
         "recommended": recommended,
         "display_names": AP_DISPLAY_NAMES,

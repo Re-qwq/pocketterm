@@ -118,17 +118,21 @@ async def _build_bot_config(bot, db):
 async def _ensure_bot_in_memory(bot_id: str, config, bot_manager) -> None:
     """确保机器人实例存在于 bot_manager 内存中, 且 bot_id 与数据库一致。
 
-    数据库的 bot_id 格式为 ``b_<hex12>`` (见 storage.create_bot_instance),
-    而 ``BotManager.create_bot`` 内部通过 ``BotInfo`` 的 default factory
-    自动生成 ``str(uuid4())[:8]`` 格式的 bot_id。两者不一致会导致后续
-    ``start_bot`` / ``stop_bot`` 等操作通过 DB bot_id 查找时找不到实例
-    (永远返回 False)。
-
-    本函数在创建后用数据库的 bot_id 覆盖内存实例的 bot_id, 并重建
-    ``_bots`` 索引, 使内存 bot_id 与数据库 bot_id 保持一致。
+    如果内存中已有实例但处于错误/僵尸状态 (_running=True 但 DB 状态为 error),
+    则先停止旧实例再重新创建, 确保 start() 可以正常启动。
     """
     if bot_id in bot_manager._bots:
-        return
+        existing = bot_manager._bots[bot_id]
+        # 如果旧实例的 _running 为 True, 说明 _run_loop 仍在运行 (可能在重连等待中)
+        # 此时 start() 会返回 False, 所以必须先停止旧实例
+        if getattr(existing, '_running', False):
+            try:
+                await bot_manager.stop_bot(bot_id)
+            except Exception:
+                pass
+            bot_manager._bots.pop(bot_id, None)
+        else:
+            return
     new_bot = await bot_manager.create_bot(config)
     # 用数据库 bot_id 覆盖 create_bot 自动生成的 bot_id, 并重建索引
     bot_manager._bots.pop(new_bot.bot_id, None)
@@ -348,7 +352,7 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
         "server_type": "rental",
         "server_code": "",
         "game_version": "1.21.93",
-        "access_point_type": "neomega",
+        "access_point_type": "purepython",
     }
 
     bot_id = await db.create_bot_instance(
@@ -357,7 +361,7 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
         account_id=account_id,
         server_code="",
         server_type="rental",
-        access_point_type="neomega",
+        access_point_type="purepython",
         config=json.dumps(config),
     )
 

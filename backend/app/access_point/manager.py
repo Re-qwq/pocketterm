@@ -606,6 +606,7 @@ def get_manager(binary_dir: Optional[str] = None) -> AccessPointManager:
 
     Args:
         binary_dir: 二进制目录（仅首次调用时生效）。
+            为 ``None`` 时使用默认目录 ``data/access_points``。
 
     Returns:
         :class:`AccessPointManager` 全局实例。
@@ -615,6 +616,10 @@ def get_manager(binary_dir: Optional[str] = None) -> AccessPointManager:
         # Bug 15.2 修复: 双重检查锁定, 避免多线程下创建多个实例。
         with _global_manager_lock:
             if _global_manager is None:
+                if binary_dir is None:
+                    from pathlib import Path
+                    binary_dir = str(Path(__file__).resolve().parent.parent / "data" / "access_points")
+                    Path(binary_dir).mkdir(parents=True, exist_ok=True)
                 _global_manager = AccessPointManager(binary_dir=binary_dir)
     return _global_manager
 

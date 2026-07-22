@@ -83,11 +83,13 @@ class AccessPointType(enum.Enum):
     接入点是 PocketTerm 与 Minecraft 网易版服务器之间的通信桥梁，
     不同接入点使用不同的底层协议:
 
+        - ``PUREPYTHON`` 纯Python协议，内置免安装，直接连接
         - ``NEOMEGA``  通过 NeOmega 进程的 WebSocket 接口通信
         - ``FATEARK``  通过 FateArk 进程的 stdin/stdout 通信
         - ``CUSTOM``   自建接入点（直接 RakNet / python-bedrock）
     """
 
+    PUREPYTHON = "purepython"
     NEOMEGA = "neomega"
     FATEARK = "fateark"
     CUSTOM = "custom"
@@ -133,7 +135,7 @@ class BotConfig:
     sauth_json: str = ""
     auth_method: str = "auto"  # auto / direct / fatalder / cookie / fbauth
     device_model: str = "Xiaomi 13"
-    access_point_type: AccessPointType = AccessPointType.NEOMEGA
+    access_point_type: AccessPointType = AccessPointType.PUREPYTHON
     auto_reconnect: bool = True
     max_reconnect_attempts: int = 3
     reconnect_delay: int = 30  # 基础延迟30秒,避免快速重连触发反作弊

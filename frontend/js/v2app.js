@@ -1025,7 +1025,10 @@
         });
         // 按需加载数据
         if (tab === "logs") loadPanelLogs();
-        if (tab === "settings") loadBotConfig();
+        if (tab === "settings") {
+            loadBotConfig();
+            loadAccessPointStatus();
+        }
         if (tab === "files") loadPanelFiles();
         if (tab === "plugins") loadPanelPlugins();
     }
@@ -2053,6 +2056,74 @@
     function resetBotConfig() {
         loadBotConfig();
         toastInfo("配置已重置");
+    }
+
+    /** 加载接入点状态 */
+    async function loadAccessPointStatus() {
+        try {
+            const res = await api("/access-points");
+            if (!res.success || !res.data) return;
+            const aps = res.data.available || [];
+            aps.forEach((ap) => {
+                const apType = ap.type || ap.name;
+                if (apType === "neomega") {
+                    const el = $("apNeomegaStatus");
+                    if (el) {
+                        el.innerHTML = ap.available
+                            ? '状态: <span style="color:#22c55e;font-weight:600;">已安装</span>'
+                            : '状态: <span style="color:var(--text-tertiary);">未安装</span>';
+                    }
+                } else if (apType === "fateark") {
+                    const el = $("apFatearkStatus");
+                    if (el) {
+                        el.innerHTML = ap.available
+                            ? '状态: <span style="color:#22c55e;font-weight:600;">已安装</span>'
+                            : '状态: <span style="color:var(--text-tertiary);">未安装</span>';
+                    }
+                }
+            });
+        } catch (_) { /* 已处理 */ }
+    }
+
+    /** 下载接入点二进制 */
+    async function downloadAccessPoint(name) {
+        const btnId = name === "neomega" ? "btnDownloadNeomega" : "btnDownloadFateark";
+        const statusId = name === "neomega" ? "apNeomegaStatus" : "apFatearkStatus";
+        const btn = $(btnId);
+        const statusEl = $(statusId);
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 下载中...';
+        }
+        if (statusEl) {
+            statusEl.innerHTML = '状态: <span style="color:#f59e0b;">正在下载...</span>';
+        }
+        try {
+            const res = await api(`/access-points/${name}/download`, { method: "POST" });
+            if (res.success) {
+                toastSuccess(`${name} 下载成功`);
+                if (statusEl) {
+                    statusEl.innerHTML = '状态: <span style="color:#22c55e;font-weight:600;">已安装</span>';
+                }
+            } else {
+                toastError(`下载失败: ${res.detail || res.message || "未知错误"}`);
+                if (statusEl) {
+                    statusEl.innerHTML = '状态: <span style="color:#ef4444;">下载失败</span>';
+                }
+            }
+        } catch (e) {
+            const msg = e.message || "网络错误";
+            toastError(`下载失败: ${msg}`);
+            if (statusEl) {
+                statusEl.innerHTML = `状态: <span style="color:#ef4444;">${msg}</span>`;
+            }
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-download"></i> 下载';
+            }
+            await loadAccessPointStatus();
+        }
     }
 
     /* ======================================================================
@@ -3130,6 +3201,10 @@
         // ---- 机器人配置 ----
         $("botConfigForm").addEventListener("submit", handleSaveBotConfig);
         $("resetBotConfig").addEventListener("click", resetBotConfig);
+
+        // ---- 接入点下载 ----
+        $("btnDownloadNeomega").addEventListener("click", () => downloadAccessPoint("neomega"));
+        $("btnDownloadFateark").addEventListener("click", () => downloadAccessPoint("fateark"));
 
         // ---- 机器人列表 ----
         $("refreshBots").addEventListener("click", loadBots);

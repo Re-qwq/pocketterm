@@ -1899,10 +1899,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                                             <i class="fas fa-plug"></i> 接入点类型
                                         </label>
                                         <select class="form-input filter-select" id="botConfigAccessPoint" style="width:100%;">
+                                            <option value="purepython">纯Python协议 (内置, 免安装)</option>
                                             <option value="neomega">NeoOmega</option>
                                             <option value="fateark">FateArk</option>
                                             <option value="custom">自定义</option>
-                                            <option value="community_bot">Community-Bot (3.9适配)</option>
                                         </select>
                                     </div>
                                     <div class="form-group full">
@@ -1922,6 +1922,46 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                                     </button>
                                 </div>
                             </form>
+                        </div>
+
+                        <!-- 接入点管理 -->
+                        <div style="margin-top:20px;padding:16px;background:var(--bg-secondary);border-radius:8px;">
+                            <h4 style="margin:0 0 12px 0;font-size:14px;display:flex;align-items:center;gap:8px;">
+                                <i class="fas fa-download" style="color:var(--accent);"></i>
+                                接入点二进制管理
+                            </h4>
+                            <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 12px 0;">
+                                纯Python协议内置免安装。NeoOmega / FateArk 需要下载二进制文件后才能使用。
+                            </p>
+                            <div id="accessPointStatusList" style="display:flex;gap:12px;flex-wrap:wrap;">
+                                <div id="apCardPurepython" class="ap-card" style="flex:1;min-width:160px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-primary);">
+                                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                                        <span style="font-size:16px;">🐍</span>
+                                        <strong style="font-size:13px;">纯Python协议</strong>
+                                    </div>
+                                    <div style="font-size:12px;color:var(--text-tertiary);">状态: <span style="color:#22c55e;font-weight:600;">已内置</span></div>
+                                </div>
+                                <div id="apCardNeomega" class="ap-card" style="flex:1;min-width:160px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-primary);">
+                                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                                        <span style="font-size:16px;">⚙️</span>
+                                        <strong style="font-size:13px;">NeoOmega</strong>
+                                    </div>
+                                    <div id="apNeomegaStatus" style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px;">状态: 检查中...</div>
+                                    <button class="btn btn-sm btn-primary" id="btnDownloadNeomega" style="font-size:12px;padding:4px 10px;">
+                                        <i class="fas fa-download"></i> 下载
+                                    </button>
+                                </div>
+                                <div id="apCardFateark" class="ap-card" style="flex:1;min-width:160px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-primary);">
+                                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                                        <span style="font-size:16px;">🎯</span>
+                                        <strong style="font-size:13px;">FateArk</strong>
+                                    </div>
+                                    <div id="apFatearkStatus" style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px;">状态: 检查中...</div>
+                                    <button class="btn btn-sm btn-primary" id="btnDownloadFateark" style="font-size:12px;padding:4px 10px;">
+                                        <i class="fas fa-download"></i> 下载
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

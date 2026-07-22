@@ -896,6 +896,9 @@ class PocketBot:
                     )
                 break
 
+        # _run_loop 退出后重置 _running 标志，确保下次 start() 可以成功启动
+        self._running = False
+
     async def _send_heartbeat(self) -> None:
         """发送心跳包 (L-25 修复: 实现真实的 MCBE 应用层心跳)。
 
