@@ -182,6 +182,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         var(--bg-app);
     transition: opacity 0.4s ease;
     overflow-y: auto;
+    padding-top: 20px;
     padding-bottom: 120px;
 }
 #authScreen.fade-out { opacity: 0; visibility: hidden; pointer-events: none; }
@@ -189,7 +190,6 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     width: 100%;
     max-width: 440px;
     padding: 24px;
-    padding-bottom: 120px;
     animation: authSlideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes authSlideUp {
@@ -197,7 +197,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     to { opacity: 1; transform: translateY(0); }
 }
 .auth-card {
-    background: rgba(22,27,34,0.8);
+    background: var(--bg-card);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--border-default);

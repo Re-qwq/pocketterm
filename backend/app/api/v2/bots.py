@@ -68,6 +68,73 @@ async def _get_bot_with_access(bot_id: str, user: dict, db):
     return bot
 
 
+async def _build_bot_config(bot, db):
+    """从数据库机器人记录构建 BotConfig 对象。
+
+    合并数据库中的 config JSON 与结构化字段 (name / account_id 等),
+    若关联了游戏账号则额外从账号库读取 ``sauth_json``。
+    """
+    from app.bot.models import BotConfig, ServerType, AccessPointType
+
+    bot_config_data = json.loads(bot["config"]) if bot["config"] else {}
+    bot_config_data.update({
+        "name": bot["name"],
+        "account_id": bot["account_id"],
+        "server_code": bot["server_code"],
+        "server_type": bot["server_type"],
+        "access_point_type": bot["access_point_type"],
+    })
+    # 如果有 account_id, 从账号库获取 sauth_json
+    if bot["account_id"]:
+        account = await db.get_account(bot["account_id"])
+        if account:
+            try:
+                metadata = json.loads(account["metadata"]) if isinstance(account["metadata"], str) else account["metadata"]
+                bot_config_data["sauth_json"] = metadata.get("sauth_json", "")
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+
+    return BotConfig(
+        name=bot_config_data.get("name", ""),
+        server_code=bot_config_data.get("server_code", ""),
+        server_password=bot_config_data.get("server_password", ""),
+        server_type=ServerType(bot_config_data.get("server_type", "rental")),
+        server_address=bot_config_data.get("server_address", ""),
+        server_port=bot_config_data.get("server_port", 19132),
+        auth_server=bot_config_data.get("auth_server", "https://nv1.nethard.pro"),
+        api_key=bot_config_data.get("api_key", ""),
+        sauth_json=bot_config_data.get("sauth_json", ""),
+        auth_method=bot_config_data.get("auth_method", "auto"),
+        device_model=bot_config_data.get("device_model", "Xiaomi 13"),
+        access_point_type=AccessPointType(bot_config_data.get("access_point_type", "neomega")),
+        auto_reconnect=bot_config_data.get("auto_reconnect", True),
+        max_reconnect_attempts=bot_config_data.get("max_reconnect_attempts", 3),
+        reconnect_delay=bot_config_data.get("reconnect_delay", 30),
+        account_id=bot_config_data.get("account_id", ""),
+    )
+
+
+async def _ensure_bot_in_memory(bot_id: str, config, bot_manager) -> None:
+    """确保机器人实例存在于 bot_manager 内存中, 且 bot_id 与数据库一致。
+
+    数据库的 bot_id 格式为 ``b_<hex12>`` (见 storage.create_bot_instance),
+    而 ``BotManager.create_bot`` 内部通过 ``BotInfo`` 的 default factory
+    自动生成 ``str(uuid4())[:8]`` 格式的 bot_id。两者不一致会导致后续
+    ``start_bot`` / ``stop_bot`` 等操作通过 DB bot_id 查找时找不到实例
+    (永远返回 False)。
+
+    本函数在创建后用数据库的 bot_id 覆盖内存实例的 bot_id, 并重建
+    ``_bots`` 索引, 使内存 bot_id 与数据库 bot_id 保持一致。
+    """
+    if bot_id in bot_manager._bots:
+        return
+    new_bot = await bot_manager.create_bot(config)
+    # 用数据库 bot_id 覆盖 create_bot 自动生成的 bot_id, 并重建索引
+    bot_manager._bots.pop(new_bot.bot_id, None)
+    new_bot.info.bot_id = bot_id
+    bot_manager._bots[bot_id] = new_bot
+
+
 # ============================================================================
 # 创建机器人实例
 # ============================================================================
@@ -262,52 +329,13 @@ async def start_bot(bot_id: str, request: Request):
     error_msg = ""
     try:
         from app.bot.manager import bot_manager
-        from app.bot.models import BotConfig, ServerType, AccessPointType
 
-        # 构建 bot 配置
-        bot_config_data = json.loads(bot["config"]) if bot["config"] else {}
-        bot_config_data.update({
-            "name": bot["name"],
-            "account_id": bot["account_id"],
-            "server_code": bot["server_code"],
-            "server_type": bot["server_type"],
-            "access_point_type": bot["access_point_type"],
-        })
-        # 如果有 account_id, 从账号库获取 sauth_json
-        if bot["account_id"]:
-            account = await db.get_account(bot["account_id"])
-            if account:
-                try:
-                    metadata = json.loads(account["metadata"]) if isinstance(account["metadata"], str) else account["metadata"]
-                    bot_config_data["sauth_json"] = metadata.get("sauth_json", "")
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
-
-        # 构造 BotConfig 对象
-        config = BotConfig(
-            name=bot_config_data.get("name", ""),
-            server_code=bot_config_data.get("server_code", ""),
-            server_password=bot_config_data.get("server_password", ""),
-            server_type=ServerType(bot_config_data.get("server_type", "rental")),
-            server_address=bot_config_data.get("server_address", ""),
-            server_port=bot_config_data.get("server_port", 19132),
-            auth_server=bot_config_data.get("auth_server", "https://nv1.nethard.pro"),
-            api_key=bot_config_data.get("api_key", ""),
-            sauth_json=bot_config_data.get("sauth_json", ""),
-            auth_method=bot_config_data.get("auth_method", "auto"),
-            device_model=bot_config_data.get("device_model", "Xiaomi 13"),
-            access_point_type=AccessPointType(bot_config_data.get("access_point_type", "neomega")),
-            auto_reconnect=bot_config_data.get("auto_reconnect", True),
-            max_reconnect_attempts=bot_config_data.get("max_reconnect_attempts", 3),
-            reconnect_delay=bot_config_data.get("reconnect_delay", 30),
-            account_id=bot_config_data.get("account_id", ""),
-        )
-
-        # 先创建机器人实例 (如果不存在), 再启动
-        if bot_id not in bot_manager._bots:
-            await bot_manager.create_bot(config)
-        await bot_manager.start_bot(bot_id)
-        started = True
+        # 构建 BotConfig, 并确保内存中存在 bot_id 一致的实例, 再启动
+        config = await _build_bot_config(bot, db)
+        await _ensure_bot_in_memory(bot_id, config, bot_manager)
+        started = await bot_manager.start_bot(bot_id)
+        if not started:
+            raise RuntimeError("start_bot 返回 False, 机器人启动失败")
     except Exception as e:
         error_msg = str(e)
 
@@ -366,10 +394,11 @@ async def restart_bot(bot_id: str, request: Request):
 
     bot = await _get_bot_with_access(bot_id, user, db)
 
-    # 先停止
+    # 先停止 (卸载插件 + 停止运行), 并移除内存中的旧实例以便用最新配置重新创建
     try:
         from app.bot.manager import bot_manager
         await bot_manager.stop_bot(bot_id)
+        bot_manager._bots.pop(bot_id, None)
     except Exception:
         pass
 
@@ -379,25 +408,14 @@ async def restart_bot(bot_id: str, request: Request):
     started = False
     error_msg = ""
     try:
-        bot_config = json.loads(bot["config"]) if bot["config"] else {}
-        bot_config.update({
-            "name": bot["name"],
-            "account_id": bot["account_id"],
-            "server_code": bot["server_code"],
-            "server_type": bot["server_type"],
-            "access_point_type": bot["access_point_type"],
-        })
-        if bot["account_id"]:
-            account = await db.get_account(bot["account_id"])
-            if account:
-                try:
-                    metadata = json.loads(account["metadata"]) if isinstance(account["metadata"], str) else account["metadata"]
-                    bot_config["sauth_json"] = metadata.get("sauth_json", "")
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
+        from app.bot.manager import bot_manager
 
-        await bot_manager.start_bot(bot_id, bot_config)
-        started = True
+        # 构建 BotConfig, 重新创建机器人实例, 再启动
+        config = await _build_bot_config(bot, db)
+        await _ensure_bot_in_memory(bot_id, config, bot_manager)
+        started = await bot_manager.start_bot(bot_id)
+        if not started:
+            raise RuntimeError("start_bot 返回 False, 机器人启动失败")
     except Exception as e:
         error_msg = str(e)
 
