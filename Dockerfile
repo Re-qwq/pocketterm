@@ -27,7 +27,7 @@ ENV PYTHONUNBUFFERED=1 \
 # -----------------------------------------------------------------------------
 # ddddocr (OCR 库) 依赖以下系统库:
 #   libglib2.0-0     - GLib 底层库 (PIL/OpenCV 依赖)
-#   libgl1-mesa-glx  - OpenGL 库 (图像处理依赖)
+#   libgl1           - OpenGL 库 (图像处理依赖, 替代已废弃的 libgl1-mesa-glx)
 #   libsm6           - X11 Session Management (OpenCV 依赖)
 #   libxrender1      - X11 Render 扩展 (PIL 依赖)
 #   libxext6         - X11 扩展库 (PIL 依赖)
@@ -35,7 +35,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
-        libgl1-mesa-glx \
+        libgl1 \
         libsm6 \
         libxrender1 \
         libxext6 \
