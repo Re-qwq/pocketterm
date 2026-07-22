@@ -1,0 +1,2402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0d1117">
+    <meta name="description" content="PocketTerm - Minecraft Bedrock 机器人管理平台">
+    <title>PocketTerm - 控制面板</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+    <style>
+/* ==========================================================================
+   PocketTerm v2 - GitHub Dark Inspired Theme
+   ========================================================================== */
+
+:root {
+    --bg-app: #0d1117;
+    --bg-card: #161b22;
+    --bg-elevated: #1c2129;
+    --bg-hover: #21262d;
+    --bg-active: #2d333b;
+    --bg-sidebar: #0d1117;
+    --bg-input: #0d1117;
+    --text-primary: #e6edf3;
+    --text-secondary: #7d8590;
+    --text-tertiary: #484f58;
+    --color-primary: #58a6ff;
+    --color-success: #3fb950;
+    --color-warning: #d29922;
+    --color-danger: #f85149;
+    --border-default: #30363d;
+    --border-muted: #21262d;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, Consolas, monospace;
+
+    --gradient-primary: linear-gradient(135deg, #58a6ff 0%, #3fb950 100%);
+    --gradient-accent: linear-gradient(135deg, #58a6ff 0%, #a371f7 100%);
+    --gradient-danger: linear-gradient(135deg, #f85149 0%, #db6d28 100%);
+
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+    --shadow-md: 0 3px 12px rgba(0,0,0,0.4);
+    --shadow-lg: 0 12px 32px rgba(0,0,0,0.5);
+    --shadow-glow: 0 0 24px rgba(88,166,255,0.15);
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
+    --radius-full: 9999px;
+
+    --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+
+    --topbar-height: 56px;
+    --sidebar-width: 240px;
+}
+
+/* ---- Reset & Base ---- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; width: 100%; }
+body {
+    font-family: var(--font-sans);
+    background: var(--bg-app);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+}
+a { color: var(--color-primary); text-decoration: none; transition: color var(--transition); }
+a:hover { text-decoration: underline; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select, textarea { font-family: inherit; font-size: inherit; color: var(--text-primary); }
+.mono { font-family: var(--font-mono); }
+.hidden { display: none !important; }
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: var(--radius-full); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-default) transparent; }
+
+/* ---- Selection ---- */
+::selection { background: rgba(88,166,255,0.3); color: var(--text-primary); }
+
+/* ==========================================================================
+   Screens (Boot / Auth / App)
+   ========================================================================== */
+.screen {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+/* ---- Boot Screen ---- */
+#bootScreen {
+    background: radial-gradient(ellipse at center, #161b22 0%, #0d1117 70%);
+    flex-direction: column;
+    gap: 32px;
+    transition: opacity 0.6s ease, visibility 0.6s ease;
+}
+#bootScreen.fade-out { opacity: 0; visibility: hidden; pointer-events: none; }
+.boot-logo {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.3;
+    color: var(--color-primary);
+    text-shadow: 0 0 20px rgba(88,166,255,0.4);
+    white-space: pre;
+    animation: bootGlow 2s ease-in-out infinite alternate;
+}
+@keyframes bootGlow {
+    from { text-shadow: 0 0 20px rgba(88,166,255,0.3); }
+    to { text-shadow: 0 0 40px rgba(88,166,255,0.6), 0 0 60px rgba(88,166,255,0.2); }
+}
+.boot-version {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-secondary);
+    letter-spacing: 1px;
+}
+.boot-version span { color: var(--color-success); font-weight: 600; }
+.boot-loader {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+.boot-loader .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--color-primary);
+    animation: bootBounce 1.2s ease-in-out infinite;
+}
+.boot-loader .dot:nth-child(2) { animation-delay: 0.15s; }
+.boot-loader .dot:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bootBounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1.2); opacity: 1; }
+}
+
+/* ---- Auth Screen ---- */
+#authScreen {
+    background:
+        radial-gradient(ellipse 80% 60% at 20% 0%, rgba(88,166,255,0.08) 0%, transparent 50%),
+        radial-gradient(ellipse 60% 60% at 80% 100%, rgba(63,185,80,0.06) 0%, transparent 50%),
+        var(--bg-app);
+    transition: opacity 0.4s ease;
+}
+#authScreen.fade-out { opacity: 0; visibility: hidden; pointer-events: none; }
+.auth-wrapper {
+    width: 100%;
+    max-width: 440px;
+    padding: 24px;
+    animation: authSlideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes authSlideUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.auth-card {
+    background: rgba(22,27,34,0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    padding: 36px 32px;
+    box-shadow: var(--shadow-lg);
+}
+.auth-header { text-align: center; margin-bottom: 28px; }
+.auth-logo {
+    width: 56px; height: 56px;
+    margin: 0 auto 16px;
+    border-radius: var(--radius-md);
+    background: var(--gradient-primary);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; color: #fff;
+    box-shadow: 0 8px 24px rgba(88,166,255,0.3);
+}
+.auth-title {
+    font-size: 22px; font-weight: 700;
+    background: var(--gradient-accent);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 0.5px;
+}
+.auth-subtitle {
+    font-size: 13px; color: var(--text-secondary);
+    margin-top: 6px;
+}
+.auth-tabs {
+    display: flex;
+    background: var(--bg-input);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    margin-bottom: 24px;
+}
+.auth-tab {
+    flex: 1;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    transition: all var(--transition);
+}
+.auth-tab.active {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-sm);
+}
+.auth-form { display: flex; flex-direction: column; gap: 16px; }
+.auth-form.hidden { display: none; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.3px;
+    display: flex; align-items: center; gap: 6px;
+}
+.form-label i { font-size: 11px; color: var(--text-tertiary); }
+.form-input {
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    font-size: 14px;
+    color: var(--text-primary);
+    transition: border-color var(--transition), box-shadow var(--transition);
+    outline: none;
+    width: 100%;
+}
+.form-input::placeholder { color: var(--text-tertiary); }
+.form-input:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.12);
+}
+.form-input.error { border-color: var(--color-danger); }
+.form-row { display: flex; gap: 12px; }
+.form-row > .form-group { flex: 1; }
+.captcha-wrap {
+    display: flex; gap: 10px; align-items: flex-end;
+}
+.captcha-wrap .form-group { flex: 1; }
+.captcha-img-box {
+    width: 120px; height: 40px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-input);
+    overflow: hidden;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: border-color var(--transition);
+}
+.captcha-img-box:hover { border-color: var(--color-primary); }
+.captcha-img-box img { width: 100%; height: 100%; object-fit: cover; }
+.captcha-img-box .captcha-placeholder { color: var(--text-tertiary); font-size: 11px; }
+
+/* ---- Buttons ---- */
+.btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 9px 16px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition);
+    border: 1px solid transparent;
+    white-space: nowrap;
+    user-select: none;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary {
+    background: var(--gradient-primary);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(88,166,255,0.2);
+}
+.btn-primary:hover:not(:disabled) {
+    box-shadow: 0 4px 16px rgba(88,166,255,0.35);
+    transform: translateY(-1px);
+}
+.btn-secondary {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--bg-active); border-color: var(--text-tertiary); }
+.btn-success {
+    background: rgba(63,185,80,0.12);
+    color: var(--color-success);
+    border-color: rgba(63,185,80,0.3);
+}
+.btn-success:hover:not(:disabled) { background: rgba(63,185,80,0.2); }
+.btn-danger {
+    background: rgba(248,81,73,0.12);
+    color: var(--color-danger);
+    border-color: rgba(248,81,73,0.3);
+}
+.btn-danger:hover:not(:disabled) { background: rgba(248,81,73,0.2); }
+.btn-warning {
+    background: rgba(210,153,34,0.12);
+    color: var(--color-warning);
+    border-color: rgba(210,153,34,0.3);
+}
+.btn-warning:hover:not(:disabled) { background: rgba(210,153,34,0.2); }
+.btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-lg { padding: 12px 24px; font-size: 14px; }
+.btn-block { width: 100%; }
+.btn-icon { padding: 8px; width: 34px; height: 34px; }
+
+.auth-footer {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+.auth-toggle {
+    color: var(--color-primary);
+    cursor: pointer;
+    font-weight: 600;
+}
+.auth-toggle:hover { text-decoration: underline; }
+
+/* ==========================================================================
+   Main App Layout
+   ========================================================================== */
+#app {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+#app.visible { opacity: 1; }
+
+/* ---- TopBar ---- */
+.topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: var(--topbar-height);
+    background: rgba(13,17,23,0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-muted);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    z-index: 50;
+    gap: 16px;
+}
+.topbar-brand {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 16px;
+}
+.topbar-brand .brand-icon {
+    width: 30px; height: 30px;
+    border-radius: 7px;
+    background: var(--gradient-primary);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 15px;
+    box-shadow: 0 2px 8px rgba(88,166,255,0.25);
+}
+.topbar-brand .brand-name {
+    background: var(--gradient-accent);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.topbar-brand .brand-version {
+    font-size: 11px; font-weight: 500;
+    color: var(--text-tertiary);
+    padding: 2px 8px;
+    background: var(--bg-hover);
+    border-radius: var(--radius-full);
+    -webkit-text-fill-color: var(--text-tertiary);
+}
+.topbar-spacer { flex: 1; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.topbar-user {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 12px 5px 5px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.topbar-user:hover { background: var(--bg-active); border-color: var(--border-default); }
+.user-avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--gradient-accent);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 13px; font-weight: 700;
+}
+.user-info { display: flex; flex-direction: column; line-height: 1.2; }
+.user-info .user-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.user-info .user-role { font-size: 10px; color: var(--text-secondary); text-transform: capitalize; }
+
+/* ---- Sidebar ---- */
+.sidebar {
+    position: fixed;
+    top: var(--topbar-height);
+    left: 0;
+    bottom: 0;
+    width: var(--sidebar-width);
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border-muted);
+    display: flex;
+    flex-direction: column;
+    z-index: 40;
+    transition: transform var(--transition-slow);
+    overflow-y: auto;
+}
+.sidebar-nav { flex: 1; padding: 12px 10px; }
+.sidebar-section { margin-bottom: 8px; }
+.sidebar-section-title {
+    padding: 12px 12px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+}
+.sidebar-divider {
+    height: 1px;
+    background: var(--border-muted);
+    margin: 8px 12px;
+}
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--transition);
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 2px;
+    position: relative;
+}
+.nav-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+.nav-item.active {
+    background: rgba(88,166,255,0.1);
+    color: var(--color-primary);
+}
+.nav-item.active::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 3px; height: 20px;
+    background: var(--color-primary);
+    border-radius: 0 3px 3px 0;
+}
+.nav-item .nav-icon { width: 18px; text-align: center; font-size: 14px; flex-shrink: 0; }
+.nav-item .nav-label { flex: 1; }
+.nav-item .nav-badge {
+    background: var(--bg-active);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: var(--radius-full);
+    min-width: 18px;
+    text-align: center;
+}
+.sidebar-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-muted);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-align: center;
+}
+.sidebar-footer .server-status {
+    display: inline-flex; align-items: center; gap: 5px;
+}
+.status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--color-success);
+    box-shadow: 0 0 6px rgba(63,185,80,0.5);
+    animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* ---- Content Area ---- */
+.content {
+    margin-left: var(--sidebar-width);
+    margin-top: var(--topbar-height);
+    width: calc(100vw - var(--sidebar-width));
+    height: calc(100vh - var(--topbar-height));
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+.view {
+    display: none;
+    padding: 24px;
+    animation: viewFadeIn 0.3s ease;
+}
+.view.active { display: block; }
+@keyframes viewFadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Page Header ---- */
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.page-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: flex; align-items: center; gap: 10px;
+}
+.page-title i { color: var(--color-primary); }
+.page-subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+.page-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* ---- Card ---- */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: all var(--transition);
+}
+.card-hover:hover {
+    border-color: var(--border-default);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+.card-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-muted);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.card-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card-title i { color: var(--color-primary); font-size: 13px; }
+.card-body { padding: 18px; }
+
+/* ---- Glass Card ---- */
+.glass-card {
+    background: rgba(22,27,34,0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(48,54,61,0.5);
+    border-radius: var(--radius-lg);
+    transition: all var(--transition);
+}
+.glass-card:hover {
+    border-color: var(--border-default);
+    background: rgba(28,33,41,0.7);
+}
+
+/* ==========================================================================
+   Dashboard
+   ========================================================================== */
+.welcome-banner {
+    background:
+        linear-gradient(135deg, rgba(88,166,255,0.08) 0%, rgba(63,185,80,0.05) 100%),
+        var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg);
+    padding: 28px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+}
+.welcome-banner::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(88,166,255,0.06) 0%, transparent 70%);
+    border-radius: 50%;
+}
+.welcome-banner h2 { font-size: 22px; font-weight: 700; margin-bottom: 6px; position: relative; }
+.welcome-banner p { color: var(--text-secondary); font-size: 14px; position: relative; }
+.welcome-banner .welcome-time { margin-top: 12px; font-size: 12px; color: var(--text-tertiary); position: relative; }
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    transition: all var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+.stat-card:hover {
+    border-color: var(--border-default);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+.stat-icon {
+    width: 48px; height: 48px;
+    border-radius: var(--radius-md);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+}
+.stat-icon.blue { background: rgba(88,166,255,0.12); color: var(--color-primary); }
+.stat-icon.green { background: rgba(63,185,80,0.12); color: var(--color-success); }
+.stat-icon.yellow { background: rgba(210,153,34,0.12); color: var(--color-warning); }
+.stat-icon.purple { background: rgba(163,113,247,0.12); color: #a371f7; }
+.stat-info { flex: 1; min-width: 0; }
+.stat-value { font-size: 26px; font-weight: 700; line-height: 1.1; color: var(--text-primary); }
+.stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+/* ---- Activity Feed ---- */
+.activity-list { display: flex; flex-direction: column; }
+.activity-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-muted);
+}
+.activity-item:last-child { border-bottom: none; }
+.activity-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-top: 6px;
+    flex-shrink: 0;
+}
+.activity-dot.success { background: var(--color-success); }
+.activity-dot.warn { background: var(--color-warning); }
+.activity-dot.error { background: var(--color-danger); }
+.activity-dot.info { background: var(--color-primary); }
+.activity-content { flex: 1; min-width: 0; }
+.activity-text { font-size: 13px; color: var(--text-primary); word-break: break-word; }
+.activity-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+
+/* ==========================================================================
+   Panels List
+   ========================================================================== */
+.panels-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+}
+.panel-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    cursor: pointer;
+    transition: all var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+.panel-card:hover {
+    border-color: var(--color-primary);
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3), var(--shadow-glow);
+}
+.panel-card::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--gradient-primary);
+    opacity: 0;
+    transition: opacity var(--transition);
+}
+.panel-card:hover::after { opacity: 1; }
+.panel-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.panel-card-name { font-size: 16px; font-weight: 700; color: var(--text-primary); word-break: break-word; }
+.panel-card-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+}
+.panel-card-meta { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.panel-meta-row { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
+.panel-meta-row i { width: 14px; text-align: center; color: var(--text-tertiary); }
+.panel-card-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 14px; padding-top: 14px;
+    border-top: 1px solid var(--border-muted);
+    gap: 8px;
+}
+
+/* ---- Status Badges ---- */
+.badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.badge::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.badge-active { background: rgba(63,185,80,0.12); color: var(--color-success); }
+.badge-expired { background: rgba(248,81,73,0.12); color: var(--color-danger); }
+.badge-stopped { background: rgba(125,133,144,0.12); color: var(--text-secondary); }
+.badge-running { background: rgba(63,185,80,0.12); color: var(--color-success); }
+.badge-error { background: rgba(248,81,73,0.12); color: var(--color-danger); }
+.badge-unused { background: rgba(88,166,255,0.12); color: var(--color-primary); }
+.badge-used { background: rgba(125,133,144,0.12); color: var(--text-secondary); }
+.badge-revoked { background: rgba(248,81,73,0.12); color: var(--color-danger); }
+.badge-suspended { background: rgba(210,153,34,0.12); color: var(--color-warning); }
+.badge-role-user { background: rgba(125,133,144,0.12); color: var(--text-secondary); }
+.badge-role-admin { background: rgba(88,166,255,0.12); color: var(--color-primary); }
+.badge-role-superadmin { background: rgba(163,113,247,0.12); color: #a371f7; }
+
+/* ==========================================================================
+   Panel Detail - SW-Style Console
+   ========================================================================== */
+.panel-detail-header {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+.panel-detail-title { flex: 1; min-width: 200px; }
+.panel-detail-title h2 { font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+.panel-detail-title .panel-id-text { font-family: var(--font-mono); font-size: 12px; color: var(--text-tertiary); margin-top: 4px; }
+.panel-detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- Console Box ---- */
+.console-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--topbar-height) - 220px);
+    min-height: 400px;
+}
+.console-tabs {
+    display: flex;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-default);
+    padding: 0 8px;
+    flex-shrink: 0;
+    overflow-x: auto;
+}
+.console-tab {
+    padding: 12px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--transition);
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    display: flex; align-items: center; gap: 7px;
+}
+.console-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+.console-tab.active {
+    color: var(--color-primary);
+    border-bottom-color: var(--color-primary);
+    background: var(--bg-card);
+}
+.console-tab i { font-size: 12px; }
+.console-body { flex: 1; overflow: hidden; position: relative; }
+.console-panel { display: none; height: 100%; flex-direction: column; }
+.console-panel.active { display: flex; }
+
+/* ---- Terminal ---- */
+.terminal-output {
+    flex: 1;
+    background: var(--bg-input);
+    padding: 14px;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary);
+}
+.terminal-line { padding: 1px 0; word-break: break-word; white-space: pre-wrap; }
+.terminal-line .ts { color: var(--text-tertiary); margin-right: 8px; }
+.terminal-line .lvl-info { color: var(--text-primary); }
+.terminal-line .lvl-success { color: var(--color-success); }
+.terminal-line .lvl-warn { color: var(--color-warning); }
+.terminal-line .lvl-error { color: var(--color-danger); }
+.terminal-line.system { color: var(--color-primary); }
+.terminal-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border-default);
+    flex-shrink: 0;
+}
+.terminal-prompt {
+    color: var(--color-success);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 700;
+}
+.terminal-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-primary);
+}
+.terminal-input::placeholder { color: var(--text-tertiary); }
+.terminal-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-default);
+    flex-shrink: 0;
+}
+.terminal-toolbar .toolbar-info {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+}
+
+/* ---- Log Viewer ---- */
+.log-viewer {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    background: var(--bg-input);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+}
+.log-entry {
+    display: flex;
+    gap: 10px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.3);
+}
+.log-entry .log-time { color: var(--text-tertiary); flex-shrink: 0; }
+.log-entry .log-level {
+    flex-shrink: 0;
+    width: 56px;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 11px;
+}
+.log-entry .log-msg { flex: 1; word-break: break-word; }
+.log-entry.level-success .log-level { color: var(--color-success); }
+.log-entry.level-error .log-level { color: var(--color-danger); }
+.log-entry.level-warn .log-level { color: var(--color-warning); }
+.log-entry.level-info .log-level { color: var(--text-secondary); }
+
+/* ---- Files Tab ---- */
+.file-grid {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+.file-item {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+    padding: 14px 10px;
+    text-align: center;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.file-item:hover { background: var(--bg-hover); border-color: var(--border-default); }
+.file-item i { font-size: 24px; color: var(--color-primary); margin-bottom: 8px; display: block; }
+.file-item .file-name { font-size: 12px; color: var(--text-secondary); word-break: break-all; }
+
+/* ---- Plugins Tab ---- */
+.plugin-list { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.plugin-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+    transition: all var(--transition);
+}
+.plugin-item:hover { border-color: var(--border-default); }
+.plugin-icon { width: 36px; height: 36px; border-radius: var(--radius-sm); background: rgba(88,166,255,0.1); color: var(--color-primary); display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+.plugin-info { flex: 1; min-width: 0; }
+.plugin-name { font-size: 13px; font-weight: 600; }
+.plugin-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+
+/* ---- Settings Tab ---- */
+.settings-form { flex: 1; overflow-y: auto; padding: 20px; }
+.settings-form .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.settings-form .form-grid .full { grid-column: 1 / -1; }
+
+/* ==========================================================================
+   Bots List
+   ========================================================================== */
+.bots-list { display: flex; flex-direction: column; gap: 10px; }
+.bot-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg);
+    transition: all var(--transition);
+}
+.bot-item:hover { border-color: var(--border-default); box-shadow: var(--shadow-sm); }
+.bot-icon {
+    width: 40px; height: 40px;
+    border-radius: var(--radius-md);
+    background: var(--gradient-accent);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 17px;
+    flex-shrink: 0;
+}
+.bot-info { flex: 1; min-width: 0; }
+.bot-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.bot-meta { font-size: 12px; color: var(--text-secondary); margin-top: 3px; display: flex; gap: 12px; flex-wrap: wrap; }
+.bot-meta span { display: inline-flex; align-items: center; gap: 4px; }
+.bot-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ==========================================================================
+   Admin - Tables
+   ========================================================================== */
+.table-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    overflow-x: auto;
+}
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.table thead { background: var(--bg-elevated); }
+.table th {
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-bottom: 1px solid var(--border-default);
+    white-space: nowrap;
+}
+.table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-muted);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+.table tbody tr { transition: background var(--transition); }
+.table tbody tr:hover { background: var(--bg-hover); }
+.table tbody tr:last-child td { border-bottom: none; }
+.table .mono-cell { font-family: var(--font-mono); font-size: 12px; }
+.table .actions-cell { display: flex; gap: 6px; }
+
+/* ---- Filter Bar ---- */
+.filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+.filter-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 7px 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--transition);
+}
+.filter-select:focus { border-color: var(--color-primary); }
+.filter-select option { background: var(--bg-card); }
+
+/* ==========================================================================
+   Empty States
+   ========================================================================== */
+.empty-state {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-secondary);
+}
+.empty-state i { font-size: 48px; color: var(--text-tertiary); margin-bottom: 16px; }
+.empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.empty-state p { font-size: 13px; }
+
+/* ---- Loading Spinner ---- */
+.spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border-default);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+}
+.spinner-sm { width: 14px; height: 14px; border-width: 2px; }
+.spinner-lg { width: 32px; height: 32px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-overlay {
+    display: flex; align-items: center; justify-content: center;
+    padding: 40px;
+    color: var(--text-secondary);
+    gap: 10px;
+    font-size: 13px;
+}
+
+/* ==========================================================================
+   Modals
+   ========================================================================== */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(1,4,9,0.7);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--transition), visibility var(--transition);
+    padding: 20px;
+}
+.modal-overlay.visible { opacity: 1; visibility: visible; }
+.modal {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    width: 100%;
+    max-width: 480px;
+    max-height: 90vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transform: scale(0.95) translateY(10px);
+    transition: transform var(--transition-slow);
+    box-shadow: var(--shadow-lg);
+}
+.modal-overlay.visible .modal { transform: scale(1) translateY(0); }
+.modal.modal-lg { max-width: 640px; }
+.modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-muted);
+}
+.modal-title { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.modal-title i { color: var(--color-primary); }
+.modal-close {
+    width: 32px; height: 32px;
+    border-radius: var(--radius-sm);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-secondary);
+    transition: all var(--transition);
+    cursor: pointer;
+}
+.modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.modal-body { padding: 20px; overflow-y: auto; }
+.modal-footer {
+    display: flex; justify-content: flex-end; gap: 10px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border-muted);
+}
+
+/* ==========================================================================
+   Toast Notifications
+   ========================================================================== */
+#toastContainer {
+    position: fixed;
+    top: 70px;
+    right: 20px;
+    z-index: 300;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+    max-width: 380px;
+}
+.toast {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-left: 3px solid var(--color-primary);
+    border-radius: var(--radius-md);
+    padding: 12px 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    box-shadow: var(--shadow-lg);
+    animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: auto;
+    min-width: 280px;
+}
+.toast.removing { animation: toastSlideOut 0.3s ease forwards; }
+@keyframes toastSlideIn {
+    from { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+@keyframes toastSlideOut {
+    to { transform: translateX(120%); opacity: 0; }
+}
+.toast-success { border-left-color: var(--color-success); }
+.toast-error { border-left-color: var(--color-danger); }
+.toast-warn { border-left-color: var(--color-warning); }
+.toast-info { border-left-color: var(--color-primary); }
+.toast-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.toast-success .toast-icon { color: var(--color-success); }
+.toast-error .toast-icon { color: var(--color-danger); }
+.toast-warn .toast-icon { color: var(--color-warning); }
+.toast-info .toast-icon { color: var(--color-primary); }
+.toast-content { flex: 1; min-width: 0; }
+.toast-title { font-size: 13px; font-weight: 600; }
+.toast-message { font-size: 12px; color: var(--text-secondary); margin-top: 2px; word-break: break-word; }
+.toast-close { color: var(--text-tertiary); cursor: pointer; padding: 2px; font-size: 13px; flex-shrink: 0; }
+.toast-close:hover { color: var(--text-primary); }
+
+/* ---- Card Key Display ---- */
+.card-key-display {
+    background: var(--bg-input);
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--color-success);
+    word-break: break-all;
+    cursor: pointer;
+    transition: all var(--transition);
+    display: flex; align-items: center; gap: 8px;
+}
+.card-key-display:hover { border-color: var(--color-primary); background: var(--bg-hover); }
+.card-key-display .copy-hint { font-size: 11px; color: var(--text-tertiary); margin-left: auto; }
+
+/* ---- Stats Summary ---- */
+.stats-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.summary-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    text-align: center;
+}
+.summary-value { font-size: 22px; font-weight: 700; }
+.summary-label { font-size: 11px; color: var(--text-secondary); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
+
+/* ---- User Menu Dropdown ---- */
+.user-menu {
+    position: absolute;
+    top: calc(var(--topbar-height) - 4px);
+    right: 20px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    min-width: 200px;
+    z-index: 60;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-8px);
+    transition: all var(--transition);
+    overflow: hidden;
+}
+.user-menu.visible { opacity: 1; visibility: visible; transform: translateY(0); }
+.user-menu-header { padding: 14px 16px; border-bottom: 1px solid var(--border-muted); }
+.user-menu-header .um-name { font-weight: 600; font-size: 14px; }
+.user-menu-header .um-id { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); margin-top: 2px; }
+.user-menu-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background var(--transition);
+}
+.user-menu-item:hover { background: var(--bg-hover); }
+.user-menu-item i { width: 16px; text-align: center; color: var(--text-secondary); }
+.user-menu-item.danger { color: var(--color-danger); }
+.user-menu-item.danger i { color: var(--color-danger); }
+
+/* ---- Mobile Menu Toggle ---- */
+.menu-toggle {
+    display: none;
+    width: 36px; height: 36px;
+    border-radius: var(--radius-sm);
+    align-items: center; justify-content: center;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.menu-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 35;
+}
+.sidebar-backdrop.visible { display: block; }
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+@media (max-width: 900px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+    .settings-form .form-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+    :root { --sidebar-width: 260px; }
+    .menu-toggle { display: flex; }
+    .sidebar {
+        transform: translateX(-100%);
+        box-shadow: var(--shadow-lg);
+    }
+    .sidebar.open { transform: translateX(0); }
+    .content {
+        margin-left: 0;
+        width: 100vw;
+    }
+    .topbar-brand .brand-name { display: none; }
+    .stats-grid { grid-template-columns: 1fr 1fr; }
+    .panels-grid { grid-template-columns: 1fr; }
+    .console-box { height: calc(100vh - var(--topbar-height) - 240px); }
+    .view { padding: 16px; }
+    .topbar-user .user-info { display: none; }
+    .modal { max-width: 100%; }
+}
+@media (max-width: 480px) {
+    .stats-grid { grid-template-columns: 1fr; }
+    .form-row { flex-direction: column; }
+    .captcha-wrap { flex-direction: column; align-items: stretch; }
+    .captcha-img-box { width: 100%; height: 48px; }
+    .auth-card { padding: 24px 20px; }
+    .boot-logo { font-size: 9px; }
+    .panel-detail-actions { width: 100%; }
+    .panel-detail-actions .btn { flex: 1; }
+}
+    </style>
+</head>
+<body>
+
+<!-- ==========================================================================
+     Boot Screen
+     ========================================================================== -->
+<div class="screen" id="bootScreen">
+    <pre class="boot-logo">
+ ____             _        _____            _
+|  _ \ _   _  ___| | _____|_   _|__   ___  | |
+| |_) | | | |/ __| |/ / _ \| |/ _ \ / _ \ | |
+|  __/| |_| | (__|   <  __/| | (_) | (_) || |
+|_|    \__,_|\___|_|\_\___||_|\___/ \___/ |_|
+    </pre>
+    <div class="boot-version">Version <span>v1.0.0</span></div>
+    <div class="boot-loader">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+    </div>
+</div>
+
+<!-- ==========================================================================
+     Auth Screen
+     ========================================================================== -->
+<div class="screen hidden" id="authScreen">
+    <div class="auth-wrapper">
+        <div class="auth-card">
+            <div class="auth-header">
+                <div class="auth-logo">
+                    <i class="fas fa-terminal"></i>
+                </div>
+                <div class="auth-title">PocketTerm</div>
+                <div class="auth-subtitle">Minecraft Bedrock 机器人管理平台</div>
+            </div>
+
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="tabLogin" data-auth-tab="login">登录</button>
+                <button class="auth-tab" id="tabRegister" data-auth-tab="register">注册</button>
+            </div>
+
+            <!-- Login Form -->
+            <form class="auth-form" id="loginForm" autocomplete="on">
+                <div class="form-group">
+                    <label class="form-label" for="loginUsername">
+                        <i class="fas fa-user"></i> 用户名
+                    </label>
+                    <input type="text" class="form-input" id="loginUsername" name="username"
+                           placeholder="输入用户名" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="loginPassword">
+                        <i class="fas fa-lock"></i> 密码
+                    </label>
+                    <input type="password" class="form-input" id="loginPassword" name="password"
+                           placeholder="输入密码" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block btn-lg" id="loginBtn">
+                    <i class="fas fa-sign-in-alt"></i> 登录
+                </button>
+            </form>
+
+            <!-- Register Form -->
+            <form class="auth-form hidden" id="registerForm" autocomplete="on">
+                <div class="form-group">
+                    <label class="form-label" for="regUsername">
+                        <i class="fas fa-user"></i> 用户名
+                    </label>
+                    <input type="text" class="form-input" id="regUsername" name="username"
+                           placeholder="3-20 位字符" autocomplete="username" required minlength="3" maxlength="20">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="regPassword">
+                        <i class="fas fa-lock"></i> 密码
+                    </label>
+                    <input type="password" class="form-input" id="regPassword" name="password"
+                           placeholder="至少 6 位" autocomplete="new-password" required minlength="6">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="regCardKey">
+                        <i class="fas fa-key"></i> 注册卡密
+                    </label>
+                    <input type="text" class="form-input mono" id="regCardKey" name="card_key"
+                           placeholder="输入注册卡密" autocomplete="off" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">
+                        <i class="fas fa-shield-alt"></i> 图形验证码
+                    </label>
+                    <div class="captcha-wrap">
+                        <div class="form-group">
+                            <input type="text" class="form-input" id="regCaptchaInput"
+                                   placeholder="输入验证码" autocomplete="off" required maxlength="4">
+                            <input type="hidden" id="regCaptchaId">
+                        </div>
+                        <div class="captcha-img-box" id="captchaImgBox" title="点击刷新验证码">
+                            <span class="captcha-placeholder">点击获取</span>
+                        </div>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block btn-lg" id="registerBtn">
+                    <i class="fas fa-user-plus"></i> 注册
+                </button>
+            </form>
+
+            <div class="auth-footer">
+                <span id="authFooterText">还没有账号？</span>
+                <span class="auth-toggle" id="authToggle">立即注册</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ==========================================================================
+     Main App
+     ========================================================================== -->
+<div id="app">
+
+    <!-- TopBar -->
+    <header class="topbar">
+        <button class="menu-toggle" id="menuToggle" aria-label="菜单">
+            <i class="fas fa-bars"></i>
+        </button>
+        <div class="topbar-brand">
+            <div class="brand-icon"><i class="fas fa-terminal"></i></div>
+            <span class="brand-name">PocketTerm</span>
+            <span class="brand-version">v1.0.0</span>
+        </div>
+        <div class="topbar-spacer"></div>
+        <div class="topbar-actions">
+            <div class="topbar-user" id="topbarUser" role="button" tabindex="0">
+                <div class="user-avatar" id="userAvatar">U</div>
+                <div class="user-info">
+                    <span class="user-name" id="currentUserName">用户</span>
+                    <span class="user-role" id="currentUserRole">user</span>
+                </div>
+                <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-tertiary);"></i>
+            </div>
+        </div>
+    </header>
+
+    <!-- User Menu Dropdown -->
+    <div class="user-menu" id="userMenu">
+        <div class="user-menu-header">
+            <div class="um-name" id="umName">用户名</div>
+            <div class="um-id" id="umId">ID: -</div>
+        </div>
+        <div class="user-menu-item" data-action="profile">
+            <i class="fas fa-id-card"></i> 个人信息
+        </div>
+        <div class="user-menu-item" data-action="change-password">
+            <i class="fas fa-key"></i> 修改密码
+        </div>
+        <div class="user-menu-item" data-action="dashboard">
+            <i class="fas fa-tachometer-alt"></i> 返回仪表盘
+        </div>
+        <div class="user-menu-item danger" data-action="logout" id="logoutBtn">
+            <i class="fas fa-sign-out-alt"></i> 退出登录
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <nav class="sidebar-nav">
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">主菜单</div>
+                <div class="nav-item active" data-view="dashboard">
+                    <i class="fas fa-tachometer-alt nav-icon"></i>
+                    <span class="nav-label">仪表盘</span>
+                </div>
+                <div class="nav-item" data-view="panels">
+                    <i class="fas fa-th-large nav-icon"></i>
+                    <span class="nav-label">面板管理</span>
+                    <span class="nav-badge" id="badgePanels">0</span>
+                </div>
+                <div class="nav-item" data-view="bots">
+                    <i class="fas fa-robot nav-icon"></i>
+                    <span class="nav-label">机器人</span>
+                    <span class="nav-badge" id="badgeBots">0</span>
+                </div>
+            </div>
+
+            <div class="sidebar-divider" id="adminDivider" style="display:none;"></div>
+
+            <div class="sidebar-section" id="adminSection" style="display:none;">
+                <div class="sidebar-section-title">管理后台</div>
+                <div class="nav-item" data-view="admin-cards">
+                    <i class="fas fa-key nav-icon"></i>
+                    <span class="nav-label">卡密管理</span>
+                </div>
+                <div class="nav-item" data-view="admin-users">
+                    <i class="fas fa-users-cog nav-icon"></i>
+                    <span class="nav-label">用户管理</span>
+                </div>
+                <div class="nav-item" data-view="admin-logs">
+                    <i class="fas fa-file-medical-alt nav-icon"></i>
+                    <span class="nav-label">系统日志</span>
+                </div>
+                <div class="nav-item" data-view="admin-system">
+                    <i class="fas fa-cog nav-icon"></i>
+                    <span class="nav-label">系统管理</span>
+                </div>
+            </div>
+        </nav>
+        <div class="sidebar-footer">
+            <div class="server-status">
+                <span class="status-dot"></span>
+                <span>服务运行中</span>
+            </div>
+            <div style="margin-top:4px;">&copy; 2026 PocketTerm</div>
+        </div>
+    </aside>
+
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+    <!-- Content Area -->
+    <main class="content" id="content">
+
+        <!-- ==================================================================
+             View: Dashboard
+             ================================================================== -->
+        <section class="view active" id="view-dashboard">
+            <div class="welcome-banner">
+                <h2 id="welcomeTitle">欢迎回来</h2>
+                <p id="welcomeText">这里是您的 PocketTerm 控制中心，管理您的机器人面板与实例。</p>
+                <div class="welcome-time" id="welcomeTime"></div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon blue"><i class="fas fa-th-large"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="statPanels">0</div>
+                        <div class="stat-label">面板总数</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon green"><i class="fas fa-robot"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="statActiveBots">0</div>
+                        <div class="stat-label">活跃机器人</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon yellow"><i class="fas fa-server"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="statAccounts">0</div>
+                        <div class="stat-label">游戏账号</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon purple"><i class="fas fa-key"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="statCards">0</div>
+                        <div class="stat-label">卡密数量</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="dashboard-grid">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-clock"></i> 最近活动</div>
+                        <button class="btn btn-ghost btn-sm" id="refreshActivity">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="activity-list" id="activityList">
+                            <div class="empty-state">
+                                <i class="fas fa-inbox"></i>
+                                <h3>暂无活动</h3>
+                                <p>最近的操作记录将显示在这里</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-bolt"></i> 快捷操作</div>
+                    </div>
+                    <div class="card-body">
+                        <div style="display:flex;flex-direction:column;gap:10px;">
+                            <button class="btn btn-secondary btn-block" style="justify-content:flex-start;" data-quick="panels">
+                                <i class="fas fa-plus-circle" style="color:var(--color-primary);"></i> 创建新面板
+                            </button>
+                            <button class="btn btn-secondary btn-block" style="justify-content:flex-start;" data-quick="bots">
+                                <i class="fas fa-robot" style="color:var(--color-success);"></i> 查看机器人
+                            </button>
+                            <button class="btn btn-secondary btn-block" style="justify-content:flex-start;" data-quick="admin-cards" id="quickCards" style="display:none;">
+                                <i class="fas fa-key" style="color:var(--color-warning);"></i> 生成卡密
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Panels List
+             ================================================================== -->
+        <section class="view" id="view-panels">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-th-large"></i> 面板管理</div>
+                    <div class="page-subtitle">管理您的所有机器人面板</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-secondary btn-sm" id="refreshPanels">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                    <button class="btn btn-primary" id="btnCreatePanel">
+                        <i class="fas fa-plus"></i> 创建面板
+                    </button>
+                </div>
+            </div>
+            <div class="panels-grid" id="panelsGrid">
+                <div class="empty-state" id="panelsEmpty">
+                    <i class="fas fa-inbox"></i>
+                    <h3>暂无面板</h3>
+                    <p>点击"创建面板"按钮，使用面板卡密创建您的第一个面板</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Panel Detail (SW-Style Console)
+             ================================================================== -->
+        <section class="view" id="view-panel-detail">
+            <div class="panel-detail-header">
+                <button class="btn btn-ghost btn-sm" id="backToPanels">
+                    <i class="fas fa-arrow-left"></i> 返回
+                </button>
+                <div class="panel-detail-title">
+                    <h2>
+                        <i class="fas fa-server" style="color:var(--color-primary);"></i>
+                        <span id="detailPanelName">面板名称</span>
+                        <span class="badge badge-active" id="detailPanelStatus">active</span>
+                    </h2>
+                    <div class="panel-id-text">Panel ID: <span id="detailPanelId" class="mono">-</span></div>
+                </div>
+                <div class="panel-detail-actions">
+                    <button class="btn btn-success btn-sm" id="btnStartBot">
+                        <i class="fas fa-play"></i> 启动
+                    </button>
+                    <button class="btn btn-danger btn-sm" id="btnStopBot">
+                        <i class="fas fa-stop"></i> 停止
+                    </button>
+                    <button class="btn btn-warning btn-sm" id="btnRestartBot">
+                        <i class="fas fa-redo"></i> 重启
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btnRenewPanel">
+                        <i class="fas fa-sync-alt"></i> 续费
+                    </button>
+                    <button class="btn btn-danger btn-sm" id="btnDeletePanel">
+                        <i class="fas fa-trash"></i> 删除
+                    </button>
+                </div>
+            </div>
+
+            <div class="console-box">
+                <div class="console-tabs">
+                    <div class="console-tab active" data-console-tab="console">
+                        <i class="fas fa-terminal"></i> 控制台
+                    </div>
+                    <div class="console-tab" data-console-tab="logs">
+                        <i class="fas fa-list"></i> 日志
+                    </div>
+                    <div class="console-tab" data-console-tab="files">
+                        <i class="fas fa-folder"></i> 文件
+                    </div>
+                    <div class="console-tab" data-console-tab="plugins">
+                        <i class="fas fa-puzzle-piece"></i> 插件
+                    </div>
+                    <div class="console-tab" data-console-tab="settings">
+                        <i class="fas fa-cog"></i> 设置
+                    </div>
+                </div>
+
+                <div class="console-body">
+                    <!-- Console Tab -->
+                    <div class="console-panel active" id="ctab-console">
+                        <div class="terminal-toolbar">
+                            <span class="toolbar-info" id="consoleInfo">等待连接...</span>
+                            <button class="btn btn-ghost btn-sm" id="consoleClearBtn" title="清屏">
+                                <i class="fas fa-eraser"></i>
+                            </button>
+                            <button class="btn btn-ghost btn-sm" id="consoleAutoscrollBtn" title="自动滚动">
+                                <i class="fas fa-arrow-down"></i>
+                            </button>
+                        </div>
+                        <div class="terminal-output" id="terminalOutput">
+                            <div class="terminal-line system"><span class="ts">[SYSTEM]</span> PocketTerm 控制台已就绪</div>
+                            <div class="terminal-line"><span class="ts">[SYSTEM]</span> 请点击"启动"按钮启动机器人</div>
+                        </div>
+                        <div class="terminal-input-row">
+                            <span class="terminal-prompt">$</span>
+                            <input type="text" class="terminal-input" id="terminalInput"
+                                   placeholder="输入命令后按回车发送..." autocomplete="off" spellcheck="false">
+                            <button class="btn btn-primary btn-sm" id="terminalSendBtn">
+                                <i class="fas fa-paper-plane"></i> 发送
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Logs Tab -->
+                    <div class="console-panel" id="ctab-logs">
+                        <div class="terminal-toolbar">
+                            <span class="toolbar-info">面板日志</span>
+                            <button class="btn btn-ghost btn-sm" id="refreshPanelLogs">
+                                <i class="fas fa-sync-alt"></i> 刷新
+                            </button>
+                        </div>
+                        <div class="log-viewer" id="panelLogViewer">
+                            <div class="empty-state">
+                                <i class="fas fa-file-alt"></i>
+                                <h3>暂无日志</h3>
+                                <p>面板操作日志将显示在这里</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Files Tab -->
+                    <div class="console-panel" id="ctab-files">
+                        <div class="terminal-toolbar">
+                            <span class="toolbar-info">文件管理器</span>
+                            <button class="btn btn-ghost btn-sm" disabled>
+                                <i class="fas fa-upload"></i> 上传
+                            </button>
+                        </div>
+                        <div class="file-grid" id="fileGrid">
+                            <div class="empty-state" style="grid-column:1/-1;">
+                                <i class="fas fa-folder-open"></i>
+                                <h3>文件管理</h3>
+                                <p>文件管理功能即将上线</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Plugins Tab -->
+                    <div class="console-panel" id="ctab-plugins">
+                        <div class="terminal-toolbar">
+                            <span class="toolbar-info">插件列表</span>
+                            <button class="btn btn-ghost btn-sm" disabled>
+                                <i class="fas fa-plus"></i> 安装插件
+                            </button>
+                        </div>
+                        <div class="plugin-list" id="pluginList">
+                            <div class="empty-state">
+                                <i class="fas fa-puzzle-piece"></i>
+                                <h3>暂无插件</h3>
+                                <p>插件管理功能即将上线</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Settings Tab -->
+                    <div class="console-panel" id="ctab-settings">
+                        <div class="terminal-toolbar">
+                            <span class="toolbar-info">机器人配置</span>
+                        </div>
+                        <div class="settings-form">
+                            <form id="botConfigForm">
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label class="form-label" for="botConfigName">
+                                            <i class="fas fa-tag"></i> 机器人名称
+                                        </label>
+                                        <input type="text" class="form-input" id="botConfigName" placeholder="机器人名称">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="botConfigAccount">
+                                            <i class="fas fa-user-circle"></i> 游戏账号 ID
+                                        </label>
+                                        <input type="text" class="form-input mono" id="botConfigAccount" placeholder="account_id">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="botConfigServerCode">
+                                            <i class="fas fa-server"></i> 租赁服编号
+                                        </label>
+                                        <input type="text" class="form-input mono" id="botConfigServerCode" placeholder="服务器编号">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="botConfigServerType">
+                                            <i class="fas fa-network-wired"></i> 服务器类型
+                                        </label>
+                                        <select class="form-input filter-select" id="botConfigServerType" style="width:100%;">
+                                            <option value="rental">租赁服 (Rental)</option>
+                                            <option value="private">私人服 (Private)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group full">
+                                        <label class="form-label" for="botConfigAccessPoint">
+                                            <i class="fas fa-plug"></i> 接入点类型
+                                        </label>
+                                        <select class="form-input filter-select" id="botConfigAccessPoint" style="width:100%;">
+                                            <option value="neomega">NeoOmega</option>
+                                            <option value="fateark">FateArk</option>
+                                            <option value="custom">自定义</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group full">
+                                        <label class="form-label" for="botConfigExtra">
+                                            <i class="fas fa-code"></i> 额外配置 (JSON)
+                                        </label>
+                                        <textarea class="form-input mono" id="botConfigExtra" rows="4"
+                                                  placeholder='{"key": "value"}' style="resize:vertical;font-size:12px;"></textarea>
+                                    </div>
+                                </div>
+                                <div style="margin-top:16px;display:flex;gap:10px;">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fas fa-save"></i> 保存配置
+                                    </button>
+                                    <button type="button" class="btn btn-secondary" id="resetBotConfig">
+                                        <i class="fas fa-undo"></i> 重置
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Bots List
+             ================================================================== -->
+        <section class="view" id="view-bots">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-robot"></i> 机器人管理</div>
+                    <div class="page-subtitle">查看和管理所有机器人实例</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-secondary btn-sm" id="refreshBots">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            <div class="bots-list" id="botsList">
+                <div class="empty-state" id="botsEmpty">
+                    <i class="fas fa-robot"></i>
+                    <h3>暂无机器人</h3>
+                    <p>前往面板详情页面创建机器人实例</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin - Card Keys
+             ================================================================== -->
+        <section class="view" id="view-admin-cards">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-key"></i> 卡密管理</div>
+                    <div class="page-subtitle">创建和管理注册卡密、面板卡密、续期卡密</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-secondary btn-sm" id="refreshCards">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                    <button class="btn btn-primary" id="btnCreateCard">
+                        <i class="fas fa-plus"></i> 生成卡密
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stats Summary -->
+            <div class="stats-summary" id="cardStatsSummary">
+                <div class="summary-item">
+                    <div class="summary-value" style="color:var(--color-primary);" id="cardStatTotal">0</div>
+                    <div class="summary-label">总卡密</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value" style="color:var(--color-success);" id="cardStatUnused">0</div>
+                    <div class="summary-label">未使用</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value" style="color:var(--text-secondary);" id="cardStatUsed">0</div>
+                    <div class="summary-label">已使用</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value" style="color:var(--color-danger);" id="cardStatRevoked">0</div>
+                    <div class="summary-label">已撤销</div>
+                </div>
+            </div>
+
+            <!-- Cards Table -->
+            <div class="card" style="margin-bottom:20px;">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-list"></i> 卡密列表</div>
+                    <div class="filter-bar" style="margin-bottom:0;">
+                        <select class="filter-select" id="cardFilterType">
+                            <option value="">全部类型</option>
+                            <option value="register">注册卡密</option>
+                            <option value="panel">面板卡密</option>
+                            <option value="renewal">续期卡密</option>
+                        </select>
+                        <select class="filter-select" id="cardFilterStatus">
+                            <option value="">全部状态</option>
+                            <option value="unused">未使用</option>
+                            <option value="used">已使用</option>
+                            <option value="revoked">已撤销</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-wrap" style="border:none;border-radius:0;">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>卡密</th>
+                                <th>类型</th>
+                                <th>状态</th>
+                                <th>时长</th>
+                                <th>创建时间</th>
+                                <th>使用时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cardsTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Card Creation Logs -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-history"></i> 卡密创建日志</div>
+                    <button class="btn btn-ghost btn-sm" id="refreshCardLogs">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="cardCreationLogs">
+                        <div class="empty-state">
+                            <i class="fas fa-file-alt"></i>
+                            <h3>暂无日志</h3>
+                            <p>卡密创建操作记录将显示在这里</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin - Users
+             ================================================================== -->
+        <section class="view" id="view-admin-users">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-users-cog"></i> 用户管理</div>
+                    <div class="page-subtitle">管理平台用户账号</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-secondary btn-sm" id="refreshUsers">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                    <button class="btn btn-primary" id="btnCreateUser">
+                        <i class="fas fa-user-plus"></i> 创建用户
+                    </button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>用户名</th>
+                            <th>角色</th>
+                            <th>状态</th>
+                            <th>创建时间</th>
+                            <th>最后登录</th>
+                            <th>过期时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usersTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin - System Logs
+             ================================================================== -->
+        <section class="view" id="view-admin-logs">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-file-medical-alt"></i> 系统日志</div>
+                    <div class="page-subtitle">查看系统运行日志</div>
+                </div>
+                <div class="page-actions">
+                    <div class="filter-bar" style="margin-bottom:0;">
+                        <select class="filter-select" id="logFilterLevel">
+                            <option value="">全部级别</option>
+                            <option value="info">Info</option>
+                            <option value="success">Success</option>
+                            <option value="warn">Warning</option>
+                            <option value="error">Error</option>
+                        </select>
+                        <button class="btn btn-secondary btn-sm" id="refreshSysLogs">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body" style="padding:0;">
+                    <div class="log-viewer" id="systemLogViewer" style="border-radius:var(--radius-lg);">
+                        <div class="empty-state">
+                            <i class="fas fa-file-alt"></i>
+                            <h3>暂无日志</h3>
+                            <p>系统日志将显示在这里</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin System (系统管理)
+             ================================================================== -->
+        <section class="view" id="view-admin-system">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-cog"></i> 系统管理</div>
+                    <div class="page-subtitle">nv1认证、封号检测、系统统计</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-secondary btn-sm" id="refreshSystemAdmin">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-grid" style="margin-bottom:20px;">
+                <div class="stat-card">
+                    <div class="stat-icon blue"><i class="fas fa-users"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="sysStatUsers">0</div>
+                        <div class="stat-label">用户总数</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon green"><i class="fas fa-th-large"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="sysStatPanels">0</div>
+                        <div class="stat-label">面板总数</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon yellow"><i class="fas fa-robot"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="sysStatBots">0</div>
+                        <div class="stat-label">机器人总数</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon purple"><i class="fas fa-key"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value" id="sysStatCards">0</div>
+                        <div class="stat-label">卡密总数</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="dashboard-grid">
+                <!-- nv1 SAuth Key -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-shield-alt"></i> nv1 SAuth 认证</div>
+                        <span class="badge badge-success" id="nv1ModeBadge">模拟模式</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="display:flex;flex-direction:column;gap:12px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:var(--text-secondary);">状态</span>
+                                <span id="nv1Status" style="font-weight:600;color:var(--color-success);">有效</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:var(--text-secondary);">Key预览</span>
+                                <span id="nv1KeyPreview" class="mono" style="font-size:12px;">-</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:var(--text-secondary);">剩余有效</span>
+                                <span id="nv1Remaining" style="font-weight:600;">- 天</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:var(--text-secondary);">需要刷新</span>
+                                <span id="nv1NeedsRefresh" style="font-weight:600;color:var(--text-secondary);">否</span>
+                            </div>
+                            <button class="btn btn-primary btn-block" id="nv1RefreshBtn">
+                                <i class="fas fa-sync-alt"></i> 手动刷新 Key
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 封号检测 -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-ban"></i> 封号检测</div>
+                        <span class="badge" id="banBadge">正常</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="display:flex;flex-direction:column;gap:12px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:var(--text-secondary);">追踪账号数</span>
+                                <span id="banTracked" style="font-weight:600;">0</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:var(--text-secondary);">疑似封号数</span>
+                                <span id="banSuspected" style="font-weight:600;color:var(--color-danger);">0</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:var(--text-secondary);">检测阈值</span>
+                                <span id="banThreshold" style="font-weight:600;">3 次</span>
+                            </div>
+                            <div id="bannedAccountsList" style="max-height:150px;overflow-y:auto;">
+                                <div class="empty-state" style="padding:16px;">
+                                    <i class="fas fa-check-circle" style="color:var(--color-success);"></i>
+                                    <p style="font-size:13px;margin-top:4px;">暂无封号记录</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 详细统计 -->
+            <div class="card" style="margin-top:20px;">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-bar"></i> 详细统计</div>
+                </div>
+                <div class="card-body">
+                    <div id="systemStatsDetail" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+                        <div class="empty-state">
+                            <i class="fas fa-chart-bar"></i>
+                            <p style="font-size:13px;">加载中...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<!-- ==========================================================================
+     Modals
+     ========================================================================== -->
+
+<!-- Create Panel Modal -->
+<div class="modal-overlay" id="modalCreatePanel">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fas fa-plus-circle"></i> 创建面板</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <form id="createPanelForm">
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label class="form-label" for="createPanelName">
+                        <i class="fas fa-tag"></i> 面板名称
+                    </label>
+                    <input type="text" class="form-input" id="createPanelName"
+                           placeholder="输入面板名称" required maxlength="50">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="createPanelCardKey">
+                        <i class="fas fa-key"></i> 面板卡密
+                    </label>
+                    <input type="text" class="form-input mono" id="createPanelCardKey"
+                           placeholder="输入面板卡密" required>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>取消</button>
+            <button class="btn btn-primary" id="createPanelSubmit" type="button">
+                <i class="fas fa-check"></i> 创建
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Create Card Key Modal -->
+<div class="modal-overlay" id="modalCreateCard">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fas fa-key"></i> 生成卡密</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <form id="createCardForm">
+                <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                    <div class="form-group">
+                        <label class="form-label" for="cardKeyType">
+                            <i class="fas fa-tag"></i> 卡密类型
+                        </label>
+                        <select class="form-input filter-select" id="cardKeyType" style="width:100%;" required>
+                            <option value="register">注册卡密</option>
+                            <option value="panel">面板卡密</option>
+                            <option value="renewal">续期卡密</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="cardKeyDuration">
+                            <i class="fas fa-clock"></i> 时长预设
+                        </label>
+                        <select class="form-input filter-select" id="cardKeyDuration" style="width:100%;" required>
+                            <option value="1h">1 小时</option>
+                            <option value="6h">6 小时</option>
+                            <option value="12h">12 小时</option>
+                            <option value="1d">1 天</option>
+                            <option value="3d">3 天</option>
+                            <option value="7d">7 天</option>
+                            <option value="14d">14 天</option>
+                            <option value="30d">30 天</option>
+                            <option value="90d">90 天</option>
+                            <option value="180d">180 天</option>
+                            <option value="365d">365 天</option>
+                            <option value="permanent" selected>永久</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="cardKeyCount">
+                            <i class="fas fa-layer-group"></i> 生成数量 (1-100)
+                        </label>
+                        <input type="number" class="form-input" id="cardKeyCount"
+                               value="1" min="1" max="100" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="cardKeyExpires">
+                            <i class="fas fa-calendar-times"></i> 卡密过期时间 (可选)
+                        </label>
+                        <input type="datetime-local" class="form-input" id="cardKeyExpires">
+                    </div>
+                </div>
+            </form>
+            <div id="cardKeyResults" style="display:none;margin-top:20px;">
+                <div class="form-label" style="margin-bottom:8px;">
+                    <i class="fas fa-check-circle" style="color:var(--color-success);"></i>
+                    生成成功 (点击卡密复制)
+                </div>
+                <div id="cardKeyResultsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>关闭</button>
+            <button class="btn btn-primary" id="createCardSubmit" type="button">
+                <i class="fas fa-magic"></i> 生成卡密
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Create User Modal -->
+<div class="modal-overlay" id="modalCreateUser">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fas fa-user-plus"></i> 创建用户</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <form id="createUserForm">
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label class="form-label" for="newUsername">
+                        <i class="fas fa-user"></i> 用户名
+                    </label>
+                    <input type="text" class="form-input" id="newUsername"
+                           placeholder="3-20 位字符" required minlength="3" maxlength="20">
+                </div>
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label class="form-label" for="newPassword">
+                        <i class="fas fa-lock"></i> 密码
+                    </label>
+                    <input type="password" class="form-input" id="newPassword"
+                           placeholder="至少 6 位" required minlength="6">
+                </div>
+                <div class="form-row" style="margin-bottom:0;">
+                    <div class="form-group">
+                        <label class="form-label" for="newUserRole">
+                            <i class="fas fa-user-tag"></i> 角色
+                        </label>
+                        <select class="form-input filter-select" id="newUserRole" style="width:100%;" required>
+                            <option value="user">普通用户</option>
+                            <option value="admin">管理员</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="newUserDuration">
+                            <i class="fas fa-hourglass-half"></i> 有效期 (天)
+                        </label>
+                        <input type="number" class="form-input" id="newUserDuration"
+                               placeholder="留空=永久" min="1">
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>取消</button>
+            <button class="btn btn-primary" id="createUserSubmit" type="button">
+                <i class="fas fa-check"></i> 创建
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Renew Panel Modal -->
+<div class="modal-overlay" id="modalRenewPanel">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fas fa-sync-alt"></i> 续费面板</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <form id="renewPanelForm">
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label class="form-label">面板名称</label>
+                    <input type="text" class="form-input" id="renewPanelName" disabled>
+                    <input type="hidden" id="renewPanelId">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="renewCardKey">
+                        <i class="fas fa-key"></i> 续期卡密
+                    </label>
+                    <input type="text" class="form-input mono" id="renewCardKey"
+                           placeholder="输入续期卡密" required>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>取消</button>
+            <button class="btn btn-primary" id="renewPanelSubmit" type="button">
+                <i class="fas fa-check"></i> 确认续费
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Confirm Modal -->
+<div class="modal-overlay" id="modalConfirm">
+    <div class="modal" style="max-width:400px;">
+        <div class="modal-header">
+            <div class="modal-title" id="confirmTitle"><i class="fas fa-exclamation-triangle"></i> 确认操作</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <p id="confirmMessage" style="font-size:14px;line-height:1.6;"></p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>取消</button>
+            <button class="btn btn-danger" id="confirmOk">
+                <i class="fas fa-check"></i> 确认
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal-overlay" id="modalChangePassword">
+    <div class="modal" style="max-width:420px;">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fas fa-key"></i> 修改密码</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <div class="form-group" style="margin-bottom:16px;">
+                <label class="form-label">当前密码</label>
+                <input type="password" class="form-input" id="changePwdOld" placeholder="输入当前密码" autocomplete="current-password">
+            </div>
+            <div class="form-group" style="margin-bottom:16px;">
+                <label class="form-label">新密码</label>
+                <input type="password" class="form-input" id="changePwdNew" placeholder="输入新密码 (至少6位)" autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label class="form-label">确认新密码</label>
+                <input type="password" class="form-input" id="changePwdConfirm" placeholder="再次输入新密码" autocomplete="new-password">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>取消</button>
+            <button class="btn btn-primary" type="button" id="changePwdSubmit">
+                <i class="fas fa-check"></i> 确认修改
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ==========================================================================
+     Toast Container
+     ========================================================================== -->
+<div id="toastContainer"></div>
+
+<!-- ==========================================================================
+     Scripts
+     ========================================================================== -->
+<script src="/js/v2app.js"></script>
+</body>
+</html>

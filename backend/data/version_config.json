@@ -1,0 +1,95 @@
+{
+  "_comment": "PocketTerm 双版本 (网易 3.8 / 3.9) 配置文件。所有字段均可被 VersionManager / ProtocolAdapter 在运行时读取。当网易升级版本时, 只需修改本文件即可, 无需改动 Python 源码。",
+  "_version_source_notes": {
+    "engine_version_3_8": "用户规格指定为 1.21.80 (Bedrock). 注意: PocketTerm 既有 app/auth/netease_direct/constants.py 中 3.8 -> 1.21.90, 此处采用与用户规格一致的 1.21.80, 待 3.9 正式发布后再次校准。",
+    "engine_version_3_9": "1.21.90 — 经 Community_Bot.exe strings 验证 (硬编码 1.21.90, 对应网易 3.9 目标版本).",
+    "patch_version_3_8": "TODO: 当前使用占位值 3.8.0.0. 实际应为网易 3.8 启动器版本号 (如 3.8.x.xxxxxx), 与 BE 1.21.80 对应. 既有 constants.py 中的 3.8.25.293531 对应的是 BE 1.21.90, 不能直接复用。",
+    "patch_version_3_9": "3.9.0 — 经 Community_Bot 启动器.exe strings 验证 (明确显示 3.9.0 版本号).",
+    "protocol_version": "RakNet 协议版本. Bedrock 1.21.x 全系列使用 10 (来源: app/protocol/raknet.py DEFAULT_PROTOCOL_VERSION).",
+    "auth_server": "认证服务器 (chainInfo 获取, PE/g79 路径). 既有 constants.py 使用 https://g79authobt.nie.netease.com; Community_Bot.exe strings 同样为 https://g79authobt.nie.netease.com. 本文件保留用户模板中的 https://g79authobt.minecraft.cn 作为备用域名 (二者均解析到同一服务)。",
+    "auth_server_pc": "PC (x19) 认证服务器, 来源: Community_Bot.exe strings — https://x19obtcore.nie.netease.com:8443 (login-otp / authentication-otp / authentication-v2 端点).",
+    "auth_server_pe": "PE 认证服务器 (Community_Bot --g79 模式), 来源: Community_Bot.exe strings — https://g79obtapigtcoregray.minecraft.cn/pe-authentication.",
+    "api_server": "API 网关 (PE/g79 路径). 来源: app/auth/netease_direct/constants.py APIGATEWAYOBT_PE.",
+    "api_server_pc": "PC (x19) API 网关, 来源: Community_Bot.exe strings — https://x19apigatewayobt.nie.netease.com (PEUID 查询 / user-detail 等).",
+    "patch_list_url": "启动器补丁列表 URL, 来源: Community_Bot.exe strings — https://g79.update.netease.com/patch_list/production/g79_rn_patchlist (引擎版本 1.21.90 关联).",
+    "sdk_version": "网易 SDK 版本号 (sauth_json.sdk_version 字段). PC=3.4.0, 来源: Community_Bot.exe strings sauth_json 示例; PE=5.2.0, 来源: app/auth/netease_direct/constants.py SDK_VERSION_PE.",
+    "gameid": "游戏 ID (sauth_json.gameid 字段). PC=x19, 来源: Community_Bot.exe strings sauth_json 示例.",
+    "platform": "平台标识 (sauth_json.platform 字段). pc / pe, 来源: Community_Bot.exe strings sauth_json 示例.",
+    "lobby_server": "联机大厅服务器. 来源: NEMCTOOLS Http.cs postAPImclobtPE 中的 https://g79mclobt.minecraft.cn."
+  },
+  "_community_bot_endpoints": {
+    "_comment": "Community_Bot.exe strings 提取的已确认端点 (PC x19 模式 + PE g79 模式). 供 sauth_builder / raknet_connection_manager 等模块直接引用。",
+    "pc": {
+      "login_otp": "https://x19obtcore.nie.netease.com:8443/login-otp",
+      "authentication_otp": "https://x19obtcore.nie.netease.com:8443/authentication-otp",
+      "authentication_v2": "https://x19obtcore.nie.netease.com:8443/authentication-v2",
+      "core": "https://x19obtcore.nie.netease.com:8443",
+      "api_gateway": "https://x19apigatewayobt.nie.netease.com"
+    },
+    "pe": {
+      "pe_authentication": "https://g79obtapigtcoregray.minecraft.cn/pe-authentication"
+    },
+    "online_lobby": {
+      "room_enter": "/online-lobby-room-enter",
+      "search_by_name": "/online-lobby-room/query/search-by-name",
+      "game_enter": "/online-lobby-game-enter"
+    },
+    "local_launcher": {
+      "get_netease_login": "http://127.0.0.1:8081/client/getNeteaseLogin",
+      "heartbeat": "http://127.0.0.1:8081/client/HeartBeat?mess="
+    }
+  },
+  "default_version": "3.8",
+  "versions": {
+    "3.8": {
+      "engine_version": "1.21.80",
+      "patch_version": "3.8.0.0",
+      "protocol_version": 10,
+      "min_engine_version": "1.21.80",
+      "min_patch_version": "3.8.0.0",
+      "auth_server": "https://g79authobt.minecraft.cn",
+      "auth_server_alt": "https://g79authobt.nie.netease.com",
+      "api_server": "https://g79apigatewayobt.minecraft.cn",
+      "lobby_server": "https://g79mclobt.minecraft.cn",
+      "replaceitem_limited": true,
+      "default_structure_mode": "STRUCTURE",
+      "max_command_block_rate": 20,
+      "chunk_size": 16,
+      "auth_server_pc": "https://x19obtcore.nie.netease.com:8443",
+      "auth_server_pe": "https://g79obtapigtcoregray.minecraft.cn",
+      "api_server_pc": "https://x19apigatewayobt.nie.netease.com",
+      "patch_list_url": "https://g79.update.netease.com/patch_list/production/g79_rn_patchlist",
+      "sdk_version": "3.4.0",
+      "sdk_version_pe": "5.2.0",
+      "gameid": "x19",
+      "platform": "pc",
+      "launcher_version": "1.10.7.22905",
+      "_notes": "3.8 阉割了 replaceitem 命令 (来源: app/protocol/nbt_placer.py), 默认使用 STRUCTURE 平台模式. 详见 community_bot_analysis.md. PC/PE 认证端点 (auth_server_pc/auth_server_pe/api_server_pc) 与 3.9 共用同一套 x19/g79 基础设施 (来源: Community_Bot.exe strings)."
+    },
+    "3.9": {
+      "engine_version": "1.21.90",
+      "patch_version": "3.9.0",
+      "protocol_version": 10,
+      "min_engine_version": "1.21.90",
+      "min_patch_version": "3.9.0",
+      "auth_server": "https://g79authobt.minecraft.cn",
+      "auth_server_alt": "https://g79authobt.nie.netease.com",
+      "api_server": "https://g79apigatewayobt.minecraft.cn",
+      "lobby_server": "https://g79mclobt.minecraft.cn",
+      "replaceitem_limited": false,
+      "default_structure_mode": "STRUCTURE",
+      "max_command_block_rate": 30,
+      "chunk_size": 16,
+      "auth_server_pc": "https://x19obtcore.nie.netease.com:8443",
+      "auth_server_pe": "https://g79obtapigtcoregray.minecraft.cn",
+      "api_server_pc": "https://x19apigatewayobt.nie.netease.com",
+      "patch_list_url": "https://g79.update.netease.com/patch_list/production/g79_rn_patchlist",
+      "sdk_version": "3.4.0",
+      "sdk_version_pe": "5.2.0",
+      "gameid": "x19",
+      "platform": "pc",
+      "launcher_version": "1.10.7.22905",
+      "_notes": "3.9 引擎版本 1.21.90 经 Community_Bot.exe strings 验证. patch_version 3.9.0 经 Community_Bot 启动器.exe strings 验证 (明确显示 3.9.0). PC 认证端点 (x19obtcore:8443) / API 网关 (x19apigatewayobt) / patch_list URL 均来自 Community_Bot.exe strings. sdk_version=3.4.0 / gameid=x19 / platform=pc 来自 Community_Bot sauth_json 示例. replaceitem_limited=false 系推测 (3.9 可能恢复完整 replaceitem 能力), 实际以游戏内测试为准."
+    }
+  }
+}

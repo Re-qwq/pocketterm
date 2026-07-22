@@ -1,0 +1,70 @@
+# =============================================================================
+# PocketTerm Docker Compose 编排文件
+# =============================================================================
+# 启动：
+#   docker compose up -d
+#
+# 停止：
+#   docker compose down
+#
+# 查看日志：
+#   docker compose logs -f
+#
+# 重建镜像（代码更新后）：
+#   docker compose up -d --build
+# =============================================================================
+version: '3.8'
+
+services:
+  pocketterm:
+    # 构建配置
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pocketterm:latest
+    container_name: pocketterm
+
+    # 端口映射：宿主机端口:容器端口
+    ports:
+      - "8000:8000"
+
+    # 数据卷挂载：持久化 SQLite 数据库、日志、配置文件
+    volumes:
+      - pocketterm_data:/app/backend/data
+      # 如需持久化插件目录，取消注释下面一行
+      # - pocketterm_plugins:/app/plugins
+
+    # 环境变量从 .env 文件读取
+    env_file:
+      - .env
+
+    # 补充环境变量（.env 中的同名变量会被覆盖）
+    environment:
+      - POCKETTERM_ENV=production
+
+    # 重启策略：除非手动停止，否则自动重启
+    restart: unless-stopped
+
+    # 健康检查：使用 curl 检测 Web 服务是否可用
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # 日志配置
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# 命名卷定义
+# =============================================================================
+volumes:
+  pocketterm_data:
+    driver: local
+  # pocketterm_plugins:
+  #   driver: local

@@ -1,0 +1,76 @@
+# =============================================================================
+# PocketTerm Docker 构建上下文排除规则
+# =============================================================================
+
+# Python 缓存和编译文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.Python
+dist/
+build/
+
+# 数据库文件（运行时生成，通过卷挂载持久化）
+*.db
+*.db-journal
+
+# 日志文件
+*.log
+
+# 虚拟环境
+venv/
+.venv/
+env/
+backend/venv/
+
+# Git 版本控制
+.git/
+.gitignore
+.gitattributes
+
+# 截图
+screenshots/
+
+# 文档
+docs/
+
+# 工具（Windows 可执行文件，Docker 中不需要）
+tools/
+
+# 二进制构建产物
+access_point_go/pocketterm_ap
+access_point_go/pocketterm_ap.bak
+
+# 敏感数据（运行时生成，不应打包进镜像）
+sauth_batch.json
+backend/data/cookie_pool.json
+backend/data/accounts.json
+backend/data/device_fingerprints.json
+config.local.yaml
+
+# IDE 配置
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 环境变量文件（可能包含敏感信息）
+.env
+.env.local
+.env.production
+
+# Docker 构建文件（不需要在镜像内）
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# Node（预留）
+node_modules/

@@ -1,0 +1,27 @@
+server:
+  host: 0.0.0.0
+  port: 8000
+security:
+  username: admin
+  password_hash: pbkdf2_sha256$100000$59fd95175836fcda07d5f5625002ead46443bc931e666a513d3dfe542784cb7b$d96b936493c1e393127107ad4539e125d8b482f23f212ca7b26a73408dbcbaf1
+  jwt_secret: bd4e4600729592f53e81b9e073dc9b06acda4605661077dd87834eaa5d80fb27
+  max_login_attempts: 5
+  lockout_duration: 300
+auth_server:
+  url: https://nv1.nethard.pro
+bot:
+  name_prefix: Bot
+  game_version: 1.21.93
+  device_os: Android
+  device_model: Samsung Galaxy S21
+  max_bots: 10
+access_point:
+  default: wlan0
+network:
+  verify_ssl: false
+plugins:
+  directory: /workspace/PocketTerm/plugins
+  auto_load: true
+logging:
+  level: INFO
+  file: /workspace/PocketTerm/backend/data/pocketterm.log

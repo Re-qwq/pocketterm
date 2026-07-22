@@ -1,0 +1,45 @@
+{
+    "import_engine": "phoenix",
+    "speed_preset": "medium",
+    "block_speed": 20,
+    "command_speed": 10,
+    "container_speed": 5,
+    "nbt_delay": 0.5,
+    "group_wait": 1.0,
+    "nbt_mode": "structure",
+    "nbt_auto_detect": true,
+    "multi_chunk": {
+        "enabled": false,
+        "grid_size": 3,
+        "algorithm": "auto",
+        "include_nbt": true,
+        "include_command_blocks": true,
+        "command_block_speed": 10
+    },
+    "patch_mode": {
+        "enabled": false,
+        "no_import_bar": false,
+        "unbuilder": "none",
+        "close_sign": false
+    },
+    "pixel_art": {
+        "dither": true,
+        "dither_algorithm": "floyd_steinberg",
+        "scale_mode": "fit",
+        "orientation": "horizontal"
+    },
+    "heartbeat": {
+        "business_interval": 10.0,
+        "failure_threshold": 3
+    },
+    "reconnect": {
+        "auto_reconnect": true,
+        "max_retries": 5,
+        "base_delay": 5,
+        "max_delay": 300
+    },
+    "uqholder": {
+        "enabled": true,
+        "fingerprint_ttl_days": 7
+    }
+}

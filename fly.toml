@@ -1,0 +1,31 @@
+# Fly.io 配置文件
+# 文档: https://fly.io/docs/reference/configuration/
+
+app = "pocketterm"
+primary_region = "nrt"  # 东京区域 (亚洲最近)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  POCKETTERM_ENV = "production"
+  # 以下密钥请通过 fly secrets set 命令设置, 不要写在这里
+  # POCKETTERM_JWT_SECRET = "..."   (fly secrets set POCKETTERM_JWT_SECRET=xxx)
+  # POCKETTERM_CORS_ORIGINS = "https://pocketterm.fly.dev"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+# 持久化卷: SQLite 数据库存储
+[mounts]
+  source = "pocketterm_data"
+  destination = "/app/backend/data"
+
+# 资源配置 (免费档)
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

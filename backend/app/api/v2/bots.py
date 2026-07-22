@@ -1,0 +1,509 @@
+"""机器人实例管理 API - 创建、启动、停止、删除。"""
+from __future__ import annotations
+
+import json
+import time
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from app.database import get_db
+
+router = APIRouter(prefix="/api/v2/bots", tags=["bots"])
+
+
+# ============================================================================
+# 请求模型
+# ============================================================================
+
+class CreateBotRequest(BaseModel):
+    panel_id: str = Field(..., max_length=64, description="所属面板 ID")
+    name: str = Field(..., min_length=1, max_length=50, description="实例名称")
+    account_id: str = Field("", max_length=64, description="关联的游戏账号 ID")
+    server_code: str = Field("", max_length=64, description="租赁服编号")
+    server_type: str = Field("rental", max_length=32, description="服务器类型: rental/private")
+    access_point_type: str = Field("neomega", max_length=32, description="接入点类型")
+    config: dict = Field(default_factory=dict, description="额外配置")
+
+
+class UpdateBotConfigRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=50, description="实例名称")
+    account_id: Optional[str] = Field(None, max_length=64, description="关联的游戏账号 ID")
+    server_code: Optional[str] = Field(None, max_length=64, description="租赁服编号")
+    server_type: Optional[str] = Field(None, max_length=32, description="服务器类型")
+    access_point_type: Optional[str] = Field(None, max_length=32, description="接入点类型")
+    config: Optional[dict] = None
+
+
+# ============================================================================
+# 权限辅助
+# ============================================================================
+
+async def _check_panel_access(panel_id: str, user: dict, db) -> None:
+    """检查用户对面板的访问权限。"""
+    panel = await db.get_panel(panel_id)
+    if panel is None:
+        raise HTTPException(status_code=404, detail="面板不存在")
+
+    if user["role"] == "user" and panel["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权操作此面板")
+
+    # 检查面板是否过期
+    now = time.time()
+    if panel["expire_at"] is not None and panel["expire_at"] < now:
+        if panel["status"] == "active":
+            await db.update_panel_status(panel_id, "expired")
+        raise HTTPException(status_code=403, detail="面板已到期，请续费后继续使用")
+
+
+async def _get_bot_with_access(bot_id: str, user: dict, db):
+    """获取机器人并验证访问权限。"""
+    bot = await db.get_bot(bot_id)
+    if bot is None:
+        raise HTTPException(status_code=404, detail="机器人实例不存在")
+
+    # 验证面板权限
+    await _check_panel_access(bot["panel_id"], user, db)
+    return bot
+
+
+# ============================================================================
+# 创建机器人实例
+# ============================================================================
+
+@router.post("")
+async def create_bot(req: CreateBotRequest, request: Request):
+    """创建机器人实例。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    # 验证面板权限
+    await _check_panel_access(req.panel_id, user, db)
+
+    bot_id = await db.create_bot_instance(
+        panel_id=req.panel_id,
+        name=req.name,
+        account_id=req.account_id,
+        server_code=req.server_code,
+        server_type=req.server_type,
+        access_point_type=req.access_point_type,
+        config=json.dumps(req.config, ensure_ascii=False),
+    )
+
+    await db.add_log(
+        target_type="bot", target_id=bot_id,
+        level="success",
+        message=f"创建机器人实例: {req.name}",
+        created_by=user["user_id"],
+    )
+
+    return {
+        "success": True,
+        "data": {"bot_id": bot_id, "name": req.name},
+    }
+
+
+# ============================================================================
+# 查询机器人
+# ============================================================================
+
+@router.get("")
+async def list_bots(
+    request: Request,
+    panel_id: Optional[str] = None,
+):
+    """列出机器人实例。用户看自己面板的, 管理员看所有。"""
+    from .auth import get_current_user
+    user = await get_current_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+
+    if panel_id:
+        await _check_panel_access(panel_id, user, db)
+        bots = await db.list_bots_by_panel(panel_id)
+    elif user["role"] in ("superadmin", "admin"):
+        bots = await db.list_all_bots()
+    else:
+        # 普通用户: 获取自己的所有面板, 然后列出对应机器人
+        panels = await db.list_panels_by_user(user["user_id"])
+        bots = []
+        for p in panels:
+            panel_bots = await db.list_bots_by_panel(p["panel_id"])
+            bots.extend(panel_bots)
+
+    return {
+        "success": True,
+        "data": [
+            {
+                "bot_id": b["bot_id"],
+                "panel_id": b["panel_id"],
+                "name": b["name"],
+                "account_id": b["account_id"],
+                "server_code": b["server_code"],
+                "server_type": b["server_type"],
+                "access_point_type": b["access_point_type"],
+                "status": b["status"],
+                "created_at": b["created_at"],
+                "last_started_at": b["last_started_at"],
+                "config": json.loads(b["config"]) if b["config"] else {},
+            }
+            for b in bots
+        ],
+    }
+
+
+@router.get("/{bot_id}")
+async def get_bot(bot_id: str, request: Request):
+    """获取机器人实例详情。"""
+    from .auth import get_current_user
+    user = await get_current_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    return {
+        "success": True,
+        "data": {
+            "bot_id": bot["bot_id"],
+            "panel_id": bot["panel_id"],
+            "name": bot["name"],
+            "account_id": bot["account_id"],
+            "server_code": bot["server_code"],
+            "server_type": bot["server_type"],
+            "access_point_type": bot["access_point_type"],
+            "status": bot["status"],
+            "created_at": bot["created_at"],
+            "last_started_at": bot["last_started_at"],
+            "config": json.loads(bot["config"]) if bot["config"] else {},
+        },
+    }
+
+
+# ============================================================================
+# 启动/停止/重启
+# ============================================================================
+
+@router.get("/{bot_id}/ban-status")
+async def get_ban_status(bot_id: str, request: Request):
+    """获取机器人关联账号的封号状态。"""
+    from .auth import get_current_user
+    user = await get_current_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录")
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    from app.ban_detection import ban_detector
+    account_id = bot["account_id"]
+
+    if not account_id:
+        return {
+            "success": True,
+            "data": {
+                "bot_id": bot_id,
+                "account_id": "",
+                "suspected_ban": False,
+                "failure_count": 0,
+                "message": "未关联游戏账号",
+            },
+        }
+
+    record = ban_detector.get_record(account_id)
+    return {
+        "success": True,
+        "data": {
+            "bot_id": bot_id,
+            "account_id": account_id,
+            "suspected_ban": ban_detector.is_suspected_ban(account_id),
+            "failure_count": ban_detector.get_failure_count(account_id),
+            "threshold": 3,
+            "record": record,
+        },
+    }
+
+
+@router.post("/{bot_id}/start")
+async def start_bot(bot_id: str, request: Request):
+    """启动机器人实例。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    # 检查面板是否过期
+    panel = await db.get_panel(bot["panel_id"])
+    now = time.time()
+    if panel and panel["expire_at"] and panel["expire_at"] < now:
+        raise HTTPException(status_code=403, detail="面板已到期，请续费后继续使用")
+
+    if bot["status"] == "running":
+        raise HTTPException(status_code=400, detail="机器人已在运行中")
+
+    # 封号检测: 检查关联账号是否被标记为封号
+    if bot["account_id"]:
+        from app.ban_detection import ban_detector
+        if ban_detector.is_suspected_ban(bot["account_id"]):
+            record = ban_detector.get_record(bot["account_id"])
+            fail_count = record["failure_count"] if record else 0
+            raise HTTPException(
+                status_code=403,
+                detail=f"账号疑似被封号 (连续 {fail_count} 次登录失败), 请解除封号标记后再启动"
+            )
+
+    # 尝试通过现有 bot_manager 启动
+    started = False
+    error_msg = ""
+    try:
+        from app.bot.manager import bot_manager
+        from app.bot.models import BotConfig, ServerType, AccessPointType
+
+        # 构建 bot 配置
+        bot_config_data = json.loads(bot["config"]) if bot["config"] else {}
+        bot_config_data.update({
+            "name": bot["name"],
+            "account_id": bot["account_id"],
+            "server_code": bot["server_code"],
+            "server_type": bot["server_type"],
+            "access_point_type": bot["access_point_type"],
+        })
+        # 如果有 account_id, 从账号库获取 sauth_json
+        if bot["account_id"]:
+            account = await db.get_account(bot["account_id"])
+            if account:
+                try:
+                    metadata = json.loads(account["metadata"]) if isinstance(account["metadata"], str) else account["metadata"]
+                    bot_config_data["sauth_json"] = metadata.get("sauth_json", "")
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+
+        # 构造 BotConfig 对象
+        config = BotConfig(
+            name=bot_config_data.get("name", ""),
+            server_code=bot_config_data.get("server_code", ""),
+            server_password=bot_config_data.get("server_password", ""),
+            server_type=ServerType(bot_config_data.get("server_type", "rental")),
+            server_address=bot_config_data.get("server_address", ""),
+            server_port=bot_config_data.get("server_port", 19132),
+            auth_server=bot_config_data.get("auth_server", "https://nv1.nethard.pro"),
+            api_key=bot_config_data.get("api_key", ""),
+            sauth_json=bot_config_data.get("sauth_json", ""),
+            auth_method=bot_config_data.get("auth_method", "auto"),
+            device_model=bot_config_data.get("device_model", "Xiaomi 13"),
+            access_point_type=AccessPointType(bot_config_data.get("access_point_type", "neomega")),
+            auto_reconnect=bot_config_data.get("auto_reconnect", True),
+            max_reconnect_attempts=bot_config_data.get("max_reconnect_attempts", 3),
+            reconnect_delay=bot_config_data.get("reconnect_delay", 30),
+            account_id=bot_config_data.get("account_id", ""),
+        )
+
+        # 先创建机器人实例 (如果不存在), 再启动
+        if bot_id not in bot_manager._bots:
+            await bot_manager.create_bot(config)
+        await bot_manager.start_bot(bot_id)
+        started = True
+    except Exception as e:
+        error_msg = str(e)
+
+    # 更新状态
+    new_status = "running" if started else "error"
+    await db.update_bot_status(bot_id, new_status)
+
+    await db.add_log(
+        target_type="bot", target_id=bot_id,
+        level="success" if started else "error",
+        message=f"启动机器人: {bot['name']}" + ("" if started else f" (失败: {error_msg})"),
+        created_by=user["user_id"],
+    )
+
+    if not started:
+        raise HTTPException(status_code=500, detail=f"启动失败: {error_msg}")
+
+    return {"success": True, "message": f"机器人 {bot['name']} 已启动"}
+
+
+@router.post("/{bot_id}/stop")
+async def stop_bot(bot_id: str, request: Request):
+    """停止机器人实例。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    if bot["status"] != "running":
+        raise HTTPException(status_code=400, detail="机器人未在运行")
+
+    try:
+        from app.bot.manager import bot_manager
+        await bot_manager.stop_bot(bot_id)
+    except Exception:
+        pass  # 即使停止失败也更新状态
+
+    await db.update_bot_status(bot_id, "stopped")
+    await db.add_log(
+        target_type="bot", target_id=bot_id,
+        level="info",
+        message=f"停止机器人: {bot['name']}",
+        created_by=user["user_id"],
+    )
+
+    return {"success": True, "message": f"机器人 {bot['name']} 已停止"}
+
+
+@router.post("/{bot_id}/restart")
+async def restart_bot(bot_id: str, request: Request):
+    """重启机器人实例。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    # 先停止
+    try:
+        from app.bot.manager import bot_manager
+        await bot_manager.stop_bot(bot_id)
+    except Exception:
+        pass
+
+    await db.update_bot_status(bot_id, "stopped")
+
+    # 再启动
+    started = False
+    error_msg = ""
+    try:
+        bot_config = json.loads(bot["config"]) if bot["config"] else {}
+        bot_config.update({
+            "name": bot["name"],
+            "account_id": bot["account_id"],
+            "server_code": bot["server_code"],
+            "server_type": bot["server_type"],
+            "access_point_type": bot["access_point_type"],
+        })
+        if bot["account_id"]:
+            account = await db.get_account(bot["account_id"])
+            if account:
+                try:
+                    metadata = json.loads(account["metadata"]) if isinstance(account["metadata"], str) else account["metadata"]
+                    bot_config["sauth_json"] = metadata.get("sauth_json", "")
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+
+        await bot_manager.start_bot(bot_id, bot_config)
+        started = True
+    except Exception as e:
+        error_msg = str(e)
+
+    await db.update_bot_status(bot_id, "running" if started else "error")
+    await db.add_log(
+        target_type="bot", target_id=bot_id,
+        level="success" if started else "error",
+        message=f"重启机器人: {bot['name']}" + ("" if started else f" (失败: {error_msg})"),
+        created_by=user["user_id"],
+    )
+
+    if not started:
+        raise HTTPException(status_code=500, detail=f"重启失败: {error_msg}")
+
+    return {"success": True, "message": f"机器人 {bot['name']} 已重启"}
+
+
+# ============================================================================
+# 更新配置
+# ============================================================================
+
+@router.put("/{bot_id}/config")
+async def update_bot_config(bot_id: str, req: UpdateBotConfigRequest, request: Request):
+    """更新机器人实例配置。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    if bot["status"] == "running":
+        raise HTTPException(status_code=400, detail="请先停止机器人再修改配置")
+
+    # 合并配置
+    old_config = json.loads(bot["config"]) if bot["config"] else {}
+    if req.config:
+        old_config.update(req.config)
+
+    config_json = json.dumps(old_config, ensure_ascii=False)
+
+    # 更新数据库 (直接 SQL)
+    updates = []
+    params = []
+    if req.name is not None:
+        updates.append("name = ?")
+        params.append(req.name)
+    if req.account_id is not None:
+        updates.append("account_id = ?")
+        params.append(req.account_id)
+    if req.server_code is not None:
+        updates.append("server_code = ?")
+        params.append(req.server_code)
+    if req.server_type is not None:
+        updates.append("server_type = ?")
+        params.append(req.server_type)
+    if req.access_point_type is not None:
+        updates.append("access_point_type = ?")
+        params.append(req.access_point_type)
+    if req.config is not None:
+        updates.append("config = ?")
+        params.append(config_json)
+
+    if updates:
+        params.append(bot_id)
+        sql = f"UPDATE bot_instances SET {', '.join(updates)} WHERE bot_id = ?"
+        await db.conn.execute(sql, params)
+        await db.conn.commit()
+
+    await db.add_log(
+        target_type="bot", target_id=bot_id,
+        level="info",
+        message=f"更新机器人配置: {bot['name']}",
+        created_by=user["user_id"],
+    )
+
+    return {"success": True, "message": "配置已更新"}
+
+
+# ============================================================================
+# 删除机器人
+# ============================================================================
+
+@router.delete("/{bot_id}")
+async def delete_bot(bot_id: str, request: Request):
+    """删除机器人实例。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    # 如果正在运行, 先停止
+    if bot["status"] == "running":
+        try:
+            from app.bot.manager import bot_manager
+            await bot_manager.stop_bot(bot_id)
+        except Exception:
+            pass
+
+    bot_name = bot["name"]
+    await db.delete_bot(bot_id)
+
+    await db.add_log(
+        target_type="bot", target_id=bot_id,
+        level="warn",
+        message=f"删除机器人: {bot_name}",
+        created_by=user["user_id"],
+    )
+    return {"success": True, "message": "机器人已删除"}

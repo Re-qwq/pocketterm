@@ -1,0 +1,51 @@
+# =============================================================================
+# PocketTerm 生产环境配置
+# =============================================================================
+# 此文件作为 Docker 容器首次启动时的配置模板。
+# 容器启动后，入口脚本会将其复制到 backend/data/config.yaml（持久化卷），
+# 后续配置变更（如修改密码）会写入持久化副本，容器重建后不丢失。
+#
+# 标记为 GENERATED_ON_FIRST_RUN 的字段会在首次加载时自动生成随机值，
+# 确保每个部署实例拥有独立的安全凭据。
+# =============================================================================
+
+server:
+  host: 0.0.0.0
+  port: 8000
+
+security:
+  username: admin
+  # 占位符：首次启动时自动生成 PBKDF2 密码哈希（默认密码 admin123）
+  # 登录后请立即在 Web 界面修改密码
+  password_hash: GENERATED_ON_FIRST_RUN
+  # 占位符：首次启动时自动生成 64 位十六进制 JWT 密钥
+  jwt_secret: GENERATED_ON_FIRST_RUN
+  max_login_attempts: 5
+  lockout_duration: 300
+
+auth_server:
+  url: https://nv1.nethard.pro
+
+bot:
+  name_prefix: Bot
+  game_version: 1.21.93
+  device_os: Android
+  device_model: Samsung Galaxy S21
+  max_bots: 10
+
+access_point:
+  default: wlan0
+
+network:
+  # 生产环境：启用 HTTPS 证书校验
+  verify_ssl: true
+
+plugins:
+  # Docker 容器内的插件目录路径
+  directory: /app/plugins
+  auto_load: true
+
+logging:
+  # 生产环境：降低日志级别，减少日志输出量
+  level: WARNING
+  file: /app/backend/data/pocketterm.log
