@@ -89,4 +89,4 @@ echo ""
 
 # 使用 exec 替换当前进程, 使 uvicorn 成为 PID 1,
 # 正确接收 SIGTERM 等信号实现优雅关闭
-exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}"
