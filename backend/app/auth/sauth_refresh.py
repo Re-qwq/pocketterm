@@ -288,93 +288,199 @@ class SauthRefresher:
     async def _refresh_via_mpay(
         self, username: str, password: str
     ) -> tuple[Optional[str], str]:
-        """简化流程: OAuth2 登录 → 提取 access_token → fever_to_sauth 转换。
+        """非 OAuth2 流程: 持久化客户端 + 预设 cookies → login.do → sdk/info → fever_to_sauth。
 
-        OAuth2 loginAndAuthorize 不被限流。登录后从 state 中提取 access_token,
-        直接尝试 fever_to_sauth 转换为 netease 频道。
+        使用单一 httpx.AsyncClient 保持所有 cookies, 先访问登录页面建立 session,
+        再 POST login.do, 避免 "请稍后再试~" 限流。
 
         Returns:
             (sauth_json, uid) 或 (None, "")
         """
-        from .netease_direct.login_4399 import _generate_deviceid
+        import re as _re
+        import httpx
+        from .netease_direct.login_4399 import (
+            _generate_deviceid,
+            VERIFY_URL,
+            CAPTCHA_URL as _4399_CAPTCHA_URL,
+            LOGIN_URL as _4399_LOGIN_URL,
+            CHECK_COOKIE_URL,
+            SDK_INFO_URL,
+            _SDK_QUERY,
+        )
+        from .netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
         from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
 
-        # Step 1: OAuth2 登录 (可靠, 不被限流)
-        oauth2_client = Login4399OAuth2()
-        oauth2_result = None
-        try:
-            oauth2_result = await oauth2_client.login(username, password)
-        finally:
-            try:
-                await oauth2_client.close()
-            except Exception:
-                pass
-
-        if oauth2_result is None:
-            self._last_refresh_debug["mpay_flow"] = {"status": "oauth2_login_failed"}
-            return None, ""
-
-        uid = oauth2_result.uid
-        # result.token = state.split("|")[1] (access_token)
-        access_token = oauth2_result.token
-        # result.sessionid = full state string
-        state = oauth2_result.sessionid
-
-        self._last_refresh_debug["mpay_flow"] = {
-            "status": "oauth2_login_ok",
-            "uid": uid,
-            "access_token_len": len(access_token),
-            "state_len": len(state),
+        _HEADERS = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
+            "Referer": "https://ptlogin.4399.com/",
+            "Origin": "https://ptlogin.4399.com",
         }
 
-        if not access_token:
-            self._last_refresh_debug["mpay_flow"]["access_token"] = "empty"
-            logger.warning("OAuth2 state 中无 access_token")
+        deviceid = _generate_deviceid()
+        self._last_refresh_debug["mpay_flow"] = {"status": "starting"}
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=20, follow_redirects=True, headers=_HEADERS
+            ) as client:
+                # Step 1: 访问登录页面建立 session cookies
+                await client.get("https://ptlogin.4399.com/ptlogin/loginFrame.do?app=kid_wdsj&redirectUrl=&displayMode=popup&layout=vertical&level=8&css=http://microgame.5054399.net/v2/resource/cssSdk/default/login.css&regLevel=8&bizId=2100001792&appId=kid_wdsj&gameId=wd&externalLogin=qq&welcomeTip=%E6%AC%A2%E8%BF%8E%E5%9B%9E%E5%88%B04399&sessionId=1&sec=1&includeFcmInfo=false&inputWidth=iptw2&postLoginHandler=default&layoutSelfAdapting=true&loginFrom=uframe&mainDivId=popup_login_div")
+                self._last_refresh_debug["mpay_flow"]["step1"] = "login_page_visited"
+
+                # Step 2: 验证用户名
+                import time as _time_mod
+                ts = int(_time_mod.time() * 1000)
+                verify_url = f"{VERIFY_URL}?username={username}&appId=kid_wdsj&t={ts}&inputWidth=iptw2&v=1"
+                resp = await client.get(verify_url)
+                verify_text = resp.text
+                need_captcha = "captchaId" in verify_text or '"code":0' not in verify_text
+                self._last_refresh_debug["mpay_flow"]["need_captcha"] = need_captcha
+
+                # Step 3: 获取验证码 + OCR (如果需要)
+                captcha_answer = ""
+                captcha_id = "captchaReq" + "".join(__import__("random").choices("0123456789", k=8))
+
+                if need_captcha:
+                    for attempt in range(8):
+                        captcha_resp = await client.get(
+                            f"{_4399_CAPTCHA_URL}?xx=1&captchaId={captcha_id}"
+                        )
+                        captcha_answer = await _ocr_captcha(captcha_resp.content)
+                        if captcha_answer and len(captcha_answer) >= 4:
+                            break
+                        captcha_id = "captchaReq" + "".join(__import__("random").choices("0123456789", k=8))
+                        captcha_answer = ""
+
+                self._last_refresh_debug["mpay_flow"]["captcha_answer"] = bool(captcha_answer)
+
+                # Step 4: POST login.do
+                login_data = {
+                    "loginFrom": "uframe",
+                    "postLoginHandler": "default",
+                    "layoutSelfAdapting": "true",
+                    "externalLogin": "qq",
+                    "displayMode": "popup",
+                    "layout": "vertical",
+                    "bizId": "2100001792",
+                    "appId": "kid_wdsj",
+                    "gameId": "wd",
+                    "css": "http://microgame.5054399.net/v2/resource/cssSdk/default/login.css",
+                    "redirectUrl": "",
+                    "sessionId": captcha_id,
+                    "mainDivId": "popup_login_div",
+                    "includeFcmInfo": "false",
+                    "level": "8",
+                    "regLevel": "8",
+                    "userNameLabel": "4399用户名",
+                    "username": username,
+                    "password": password,
+                    "welcomeTip": "欢迎回到4399",
+                    "sec": "1",
+                    "inputCaptcha": captcha_answer,
+                    "reg_eula_agree": "on",
+                }
+                resp = await client.post(f"{_4399_LOGIN_URL}", data=login_data)
+                login_text = resp.text
+
+                if "登录成功" not in login_text:
+                    self._last_refresh_debug["mpay_flow"]["status"] = "login_failed"
+                    self._last_refresh_debug["mpay_flow"]["login_response"] = login_text[:300]
+                    return None, ""
+
+                self._last_refresh_debug["mpay_flow"]["status"] = "login_ok"
+
+                # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
+                rand_time = str(int(_time_mod.time() * 1000))
+                check_url = f"{CHECK_COOKIE_URL}?appId=kid_wdsj&gameUrl=&rand_time={rand_time}"
+                resp2 = await client.get(check_url)
+
+                # follow_redirects=True, so resp2 is the final response
+                # Extract from the URL or the response
+                final_url = str(resp2.url)
+                redirect_text = final_url + resp2.text
+
+                sig_match = _re.search(r"sig=([^&]+)", redirect_text)
+                uid_match = _re.search(r"uid=([^&]+)", redirect_text)
+                time_match = _re.search(r"time=([^&]+)", redirect_text)
+                state_match = _re.search(r"validateState=([^&]+)", redirect_text)
+
+                sig = sig_match.group(1) if sig_match else ""
+                ck_uid = uid_match.group(1) if uid_match else ""
+                login_time = time_match.group(1) if time_match else ""
+                validate_state = state_match.group(1) if state_match else ""
+
+                if not sig:
+                    self._last_refresh_debug["mpay_flow"]["check_cookie"] = "no_sig"
+                    self._last_refresh_debug["mpay_flow"]["final_url"] = final_url[:300]
+                    return None, ""
+
+                self._last_refresh_debug["mpay_flow"]["check_cookie"] = "ok"
+                self._last_refresh_debug["mpay_flow"]["uid"] = ck_uid
+
+                # Step 6: sdk/info → MPay SDK token
+                query_str = _SDK_QUERY.format(
+                    game_id="500352",
+                    sig=sig,
+                    uid=ck_uid,
+                    time=login_time,
+                    validateState=validate_state,
+                    username=username,
+                )
+                sdk_url = f"{SDK_INFO_URL}?callback=&queryStr={query_str}"
+                resp3 = await client.get(sdk_url)
+                sdk_text = resp3.text.strip()
+
+                # 去除 JSONP 包裹
+                if sdk_text.startswith("(") and sdk_text.endswith(")"):
+                    sdk_text = sdk_text[1:-1]
+                elif "(" in sdk_text and sdk_text.endswith(")"):
+                    inner_start = sdk_text.find("(")
+                    if inner_start != -1:
+                        sdk_text = sdk_text[inner_start + 1 : -1]
+
+                sdk_data = json.loads(sdk_text) if sdk_text else {}
+                sdk_login_data = sdk_data.get("sdk_login_data", {})
+                mpay_token = sdk_login_data.get("token", "")
+                mpay_sdkuid = sdk_login_data.get("sdkuid", ck_uid)
+
+                self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
+                self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
+
+        except Exception as e:
+            self._last_refresh_debug["mpay_flow"]["status"] = "exception"
+            self._last_refresh_debug["mpay_flow"]["error"] = str(e)
+            logger.warning(f"非 OAuth2 流程异常: {e}")
             return None, ""
 
-        # Step 2: 尝试 fever_to_sauth (使用 access_token)
-        deviceid = _generate_deviceid()
+        if not mpay_token:
+            self._last_refresh_debug["mpay_flow"]["mpay_token"] = "empty"
+            logger.warning("未获取到 MPay token")
+            return None, ""
+
+        # Step 7: fever_to_sauth → netease 频道
         self._last_refresh_debug["mpay_flow"]["deviceid"] = deviceid
 
         try:
             convert_result = await _fever_to_sauth(
-                sdkuid=uid,
-                sessionid=access_token,
+                sdkuid=mpay_sdkuid,
+                sessionid=mpay_token,
                 deviceid=deviceid,
             )
             if convert_result.get("success"):
                 logger.info(
-                    f"fever_to_sauth 转换成功 (access_token), "
+                    f"fever_to_sauth 转换成功, "
                     f"已切换到 netease 频道 (账号: {username})"
                 )
                 self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "success"
                 self._last_refresh_debug["final_channel"] = "netease"
-                return convert_result["sauth_json"], uid
+                return convert_result["sauth_json"], mpay_sdkuid
             else:
                 logger.warning(
-                    f"fever_to_sauth (access_token) 失败: "
+                    f"fever_to_sauth 转换失败: "
                     f"{convert_result.get('message', '')}"
                 )
                 self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "failed"
                 self._last_refresh_debug["mpay_flow"]["fever_error"] = convert_result.get("message", "")
-
-                # 回退: 尝试用完整 state 作为 sessionid
-                if state and state != access_token:
-                    logger.info("尝试用完整 state 作为 sessionid...")
-                    convert_result2 = await _fever_to_sauth(
-                        sdkuid=uid,
-                        sessionid=state,
-                        deviceid=deviceid,
-                    )
-                    if convert_result2.get("success"):
-                        logger.info("fever_to_sauth (state) 转换成功")
-                        self._last_refresh_debug["mpay_flow"]["fever_to_sauth_state"] = "success"
-                        self._last_refresh_debug["final_channel"] = "netease"
-                        return convert_result2["sauth_json"], uid
-                    else:
-                        self._last_refresh_debug["mpay_flow"]["fever_to_sauth_state"] = "failed"
-                        self._last_refresh_debug["mpay_flow"]["fever_state_error"] = convert_result2.get("message", "")
-
                 return None, ""
         except Exception as convert_err:
             logger.warning(f"fever_to_sauth 异常: {convert_err}")
