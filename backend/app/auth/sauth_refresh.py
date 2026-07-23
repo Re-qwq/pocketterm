@@ -353,7 +353,7 @@ class SauthRefresher:
 
         try:
             async with httpx.AsyncClient(
-                timeout=20, follow_redirects=True, headers=_HEADERS
+                timeout=20, follow_redirects=True, headers=_HEADERS, verify=False
             ) as client:
                 # Step 1: 访问登录页面建立 session cookies
                 await client.get("https://ptlogin.4399.com/ptlogin/loginFrame.do?app=kid_wdsj&redirectUrl=&displayMode=popup&layout=vertical&level=8&css=http://microgame.5054399.net/v2/resource/cssSdk/default/login.css&regLevel=8&bizId=2100001792&appId=kid_wdsj&gameId=wd&externalLogin=qq&welcomeTip=%E6%AC%A2%E8%BF%8E%E5%9B%9E%E5%88%B04399&sessionId=1&sec=1&includeFcmInfo=false&inputWidth=iptw2&postLoginHandler=default&layoutSelfAdapting=true&loginFrom=uframe&mainDivId=popup_login_div")
@@ -632,41 +632,42 @@ class SauthRefresher:
         self._last_refresh_debug["mpay_flow"]["deviceid"] = device_fp_udid
         self._last_refresh_debug["mpay_flow"]["sauth_channel"] = "4399pc"
 
-        # 调用 uni_sauth 验证 sauth_json
+        # 调用 uni_sauth 验证 sauth_json (使用已有 client, 带 cookies 和 verify=False)
         try:
             uni_headers = {
                 "User-Agent": "WPFLauncher/0.0.0.0",
                 "Content-Type": "application/json",
             }
-            async with httpx.AsyncClient(timeout=15) as uni_client:
-                uni_resp = await uni_client.post(
-                    _UNI_SAUTH_URL,
-                    content=sauth_inner_str.encode("utf-8"),
-                    headers=uni_headers,
+            # 使用已有的 client (带 4399 登录 cookies + verify=False)
+            uni_resp = await client.post(
+                _UNI_SAUTH_URL,
+                content=sauth_inner_str.encode("utf-8"),
+                headers=uni_headers,
+            )
+            self._last_refresh_debug["mpay_flow"]["uni_sauth_http"] = uni_resp.status_code
+            try:
+                uni_data = uni_resp.json()
+            except Exception:
+                uni_data = {}
+
+            uni_code = uni_data.get("code", -1)
+            self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = uni_code
+            self._last_refresh_debug["mpay_flow"]["uni_sauth_msg"] = uni_data.get("message", "")[:200]
+
+            if uni_code != 0:
+                logger.warning(
+                    f"uni_sauth 失败: code={uni_code}, "
+                    f"msg={uni_data.get('message', '')}"
                 )
-                try:
-                    uni_data = uni_resp.json()
-                except Exception:
-                    uni_data = {}
+                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "uni_sauth_failed"
+                return None, ""
 
-                uni_code = uni_data.get("code", -1)
-                self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = uni_code
-                self._last_refresh_debug["mpay_flow"]["uni_sauth_msg"] = uni_data.get("message", "")[:200]
-
-                if uni_code != 0:
-                    logger.warning(
-                        f"uni_sauth 失败: code={uni_code}, "
-                        f"msg={uni_data.get('message', '')}"
-                    )
-                    self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "uni_sauth_failed"
-                    return None, ""
-
-                logger.info(
-                    f"uni_sauth 验证成功 (4399pc 频道, 账号: {username})"
-                )
-                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "uni_sauth_ok"
-                self._last_refresh_debug["final_channel"] = "4399pc"
-                return sauth_wrapped, mpay_sdkuid
+            logger.info(
+                f"uni_sauth 验证成功 (4399pc 频道, 账号: {username})"
+            )
+            self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "uni_sauth_ok"
+            self._last_refresh_debug["final_channel"] = "4399pc"
+            return sauth_wrapped, mpay_sdkuid
 
         except Exception as convert_err:
             logger.warning(f"uni_sauth 异常: {convert_err}")
