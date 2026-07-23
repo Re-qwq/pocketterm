@@ -124,6 +124,9 @@ def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
     port = int(os.environ.get("SMTP_PORT", "465"))
     user = os.environ.get("SMTP_USER", "").strip()
     password = os.environ.get("SMTP_PASS", "").strip()
+    # SMTP_USER 未设置时回退到 SMTP_FROM (QQ 邮箱 SMTP 用户名即邮箱地址)
+    if not user:
+        user = os.environ.get("SMTP_FROM", "").strip()
     sender = os.environ.get("SMTP_FROM", "").strip() or user
 
     if not host or not user or not password:
