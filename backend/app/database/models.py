@@ -73,6 +73,10 @@ class User:
     expire_at: Optional[float] = None  # None = 永久
     created_by: str = ""  # 创建者 user_id
     must_change_password: bool = False  # 首次登录/重置后需强制修改密码
+    balance: float = 0.0  # 用户余额
+    email: str = ""  # QQ邮箱
+    avatar: str = ""  # 头像URL
+    max_storage: int = 524288  # 最大存储空间(字节), 默认512KB
 
 
 @dataclass

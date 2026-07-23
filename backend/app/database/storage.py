@@ -82,7 +82,11 @@ class Database:
                     last_login_ip   TEXT NOT NULL DEFAULT '',
                     expire_at       REAL,
                     created_by      TEXT NOT NULL DEFAULT '',
-                    must_change_password INTEGER NOT NULL DEFAULT 0
+                    must_change_password INTEGER NOT NULL DEFAULT 0,
+                    balance         REAL NOT NULL DEFAULT 0,
+                    email           TEXT NOT NULL DEFAULT '',
+                    avatar          TEXT NOT NULL DEFAULT '',
+                    max_storage     INTEGER NOT NULL DEFAULT 524288
                 );
                 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
                 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
@@ -218,6 +222,68 @@ class Database:
                     created_at      REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_sauth_accounts_status ON sauth_accounts(status);
+
+                -- 商店商品表
+                CREATE TABLE IF NOT EXISTS shop_products (
+                    product_id      TEXT PRIMARY KEY,
+                    category        TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    description     TEXT NOT NULL DEFAULT '',
+                    price           REAL NOT NULL DEFAULT 0,
+                    duration_days   REAL,
+                    card_type       TEXT NOT NULL DEFAULT '',
+                    file_path       TEXT NOT NULL DEFAULT '',
+                    status          TEXT NOT NULL DEFAULT 'active',
+                    created_by      TEXT NOT NULL DEFAULT '',
+                    created_at      REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_shop_products_category ON shop_products(category);
+                CREATE INDEX IF NOT EXISTS idx_shop_products_status ON shop_products(status);
+
+                -- 商店订单表
+                CREATE TABLE IF NOT EXISTS shop_orders (
+                    order_id        TEXT PRIMARY KEY,
+                    user_id         TEXT NOT NULL,
+                    product_id      TEXT NOT NULL,
+                    product_name    TEXT NOT NULL DEFAULT '',
+                    price           REAL NOT NULL DEFAULT 0,
+                    status          TEXT NOT NULL DEFAULT 'completed',
+                    card_key        TEXT NOT NULL DEFAULT '',
+                    file_id         TEXT NOT NULL DEFAULT '',
+                    created_at      REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_shop_orders_user ON shop_orders(user_id);
+                CREATE INDEX IF NOT EXISTS idx_shop_orders_created ON shop_orders(created_at);
+
+                -- 用户文件表
+                CREATE TABLE IF NOT EXISTS user_files (
+                    file_id         TEXT PRIMARY KEY,
+                    user_id         TEXT NOT NULL,
+                    category        TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    description     TEXT NOT NULL DEFAULT '',
+                    price           REAL NOT NULL DEFAULT 0,
+                    file_path       TEXT NOT NULL,
+                    file_size       INTEGER NOT NULL DEFAULT 0,
+                    status          TEXT NOT NULL DEFAULT 'pending',
+                    reject_reason   TEXT NOT NULL DEFAULT '',
+                    download_count  INTEGER NOT NULL DEFAULT 0,
+                    created_at      REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_files_user ON user_files(user_id);
+                CREATE INDEX IF NOT EXISTS idx_user_files_category ON user_files(category);
+                CREATE INDEX IF NOT EXISTS idx_user_files_status ON user_files(status);
+
+                -- 邮箱验证码表
+                CREATE TABLE IF NOT EXISTS email_verifications (
+                    id              TEXT PRIMARY KEY,
+                    email           TEXT NOT NULL,
+                    code            TEXT NOT NULL,
+                    expires_at      REAL NOT NULL,
+                    used            INTEGER NOT NULL DEFAULT 0,
+                    created_at      REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_email_verif_email ON email_verifications(email);
             """)
             await self._conn.commit()
 
@@ -238,6 +304,7 @@ class Database:
             await self._migrate_users_table()
             await self._migrate_announcements_table()
             await self._migrate_sauth_accounts_table()
+            await self._migrate_users_v2_table()
 
             self._initialized = True
             logger.info("数据库初始化完成: %s", self._db_path)
@@ -307,6 +374,24 @@ class Database:
         await self.conn.commit()
         logger.debug("sauth_accounts 表迁移检查完成")
 
+    async def _migrate_users_v2_table(self) -> None:
+        """v2 迁移: 为 users 表补充 balance / email / avatar / max_storage 列。"""
+        cursor = await self.conn.execute("PRAGMA table_info(users)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        new_cols = {
+            "balance": "REAL NOT NULL DEFAULT 0",
+            "email": "TEXT NOT NULL DEFAULT ''",
+            "avatar": "TEXT NOT NULL DEFAULT ''",
+            "max_storage": "INTEGER NOT NULL DEFAULT 524288",
+        }
+        for col_name, col_def in new_cols.items():
+            if col_name not in columns:
+                await self.conn.execute(
+                    f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"
+                )
+                logger.info("users 表迁移: 已添加 %s 列", col_name)
+        await self.conn.commit()
+
     @property
     def conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -325,22 +410,27 @@ class Database:
         created_by: str = "",
         expire_at: Optional[float] = None,
         must_change_password: bool = False,
+        email: str = "",
+        avatar: str = "",
     ) -> str:
         """创建用户，返回 user_id。
 
         Args:
             must_change_password: 为 ``True`` 时用户首次登录后将被要求修改
                 密码 (默认管理员账号应设为 ``True``)。
+            email: 用户邮箱 (可选，QQ 邮箱注册时写入)。
+            avatar: 用户头像 URL (可选，QQ 邮箱注册时自动生成)。
         """
         user_id = f"u_{uuid.uuid4().hex[:12]}"
         await self.conn.execute(
             """INSERT INTO users
                (user_id, username, password_hash, role, status, created_at,
-                expire_at, created_by, must_change_password)
-               VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)""",
+                expire_at, created_by, must_change_password, email, avatar)
+               VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)""",
             (
                 user_id, username, password_hash, role, _now(),
                 expire_at, created_by, 1 if must_change_password else 0,
+                email, avatar,
             ),
         )
         await self.conn.commit()

@@ -43,3 +43,4 @@ Thumbs.db
 
 # Node (if any frontend tooling added later)
 node_modules/
+backend/data/uploads/

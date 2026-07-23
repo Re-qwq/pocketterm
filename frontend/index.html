@@ -284,18 +284,30 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 }
 .captcha-wrap .form-group { flex: 1; }
 .captcha-img-box {
-    width: 120px; height: 40px;
+    /* 容器至少 56px 高, 容纳 50px 验证码图片并留出内边距, 防止顶部被裁切 */
+    width: 170px;
+    min-height: 56px;
+    height: 56px;
+    padding: 3px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     background: var(--bg-input);
-    overflow: hidden;
+    overflow: visible;
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
+    box-sizing: border-box;
     transition: border-color var(--transition);
 }
 .captcha-img-box:hover { border-color: var(--color-primary); }
-.captcha-img-box img { width: 100%; height: 100%; object-fit: cover; }
+/* 使用 contain 确保整张验证码图片完整显示, 不被裁切 */
+.captcha-img-box img {
+    width: 100%;
+    height: 100%;
+    max-height: 50px;
+    object-fit: contain;
+    border-radius: calc(var(--radius-md) - 2px);
+}
 .captcha-img-box .captcha-placeholder { color: var(--text-tertiary); font-size: 11px; }
 
 /* ---- Buttons ---- */
@@ -423,6 +435,18 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 }
 .topbar-spacer { flex: 1; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
+/* 余额显示 */
+.topbar-balance {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    background: rgba(63,185,80,0.1);
+    border: 1px solid rgba(63,185,80,0.3);
+    border-radius: var(--radius-full);
+    font-size: 12px; font-weight: 600;
+    color: var(--color-success);
+    white-space: nowrap;
+    cursor: default;
+}
 .theme-toggle {
     background: var(--bg-elevated);
     border: 1px solid var(--border-default);
@@ -728,6 +752,23 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 .activity-text { font-size: 13px; color: var(--text-primary); word-break: break-word; }
 .activity-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
+/* ---- Activity Collapse (最近活动 折叠) ---- */
+.activity-collapse {
+    max-height: 1200px;
+    overflow: hidden;
+    opacity: 1;
+    transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+                padding-top 0.35s ease,
+                padding-bottom 0.35s ease,
+                opacity 0.3s ease;
+}
+.activity-collapse.collapsed {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+}
+
 /* ==========================================================================
    Panels List
    ========================================================================== */
@@ -924,13 +965,30 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 
 /* ---- Log Viewer ---- */
 .log-viewer {
-    flex: 1;
+    /* flex-basis 使用 auto, 避免 0% 基准导致容器宽度塌缩为 0 (文字被迫竖排) */
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 12px;
     background: var(--bg-input);
     font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.7;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    writing-mode: horizontal-tb;
+}
+/* 系统日志查看器: 强制水平排版, 保证文字横向显示 */
+#systemLogViewer {
+    width: 100%;
+    min-height: 360px;
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+}
+#systemLogViewer > div {
+    flex-wrap: wrap;
 }
 .log-entry {
     display: flex;
@@ -1358,7 +1416,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     .stats-grid { grid-template-columns: 1fr; }
     .form-row { flex-direction: column; }
     .captcha-wrap { flex-direction: column; align-items: stretch; }
-    .captcha-img-box { width: 100%; height: 48px; }
+    .captcha-img-box { width: 100%; min-height: 56px; height: 56px; }
     .auth-card { padding: 24px 20px; }
     .boot-logo { font-size: 9px; }
     .panel-detail-actions { width: 100%; }
@@ -1477,7 +1535,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 |  __/| |_| | (__|   <  __/| | (_) | (_) || |
 |_|    \__,_|\___|_|\_\___||_|\___/ \___/ |_|
     </pre>
-    <div class="boot-version">Version <span>v1.5</span></div>
+    <div class="boot-version">Version <span>v2.0</span></div>
     <div class="boot-loader">
         <span class="dot"></span>
         <span class="dot"></span>
@@ -1549,6 +1607,25 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                            placeholder="输入注册卡密" autocomplete="off" required>
                 </div>
                 <div class="form-group">
+                    <label class="form-label" for="regEmail">
+                        <i class="fas fa-envelope"></i> QQ邮箱
+                    </label>
+                    <div style="display:flex;gap:10px;align-items:stretch;">
+                        <input type="email" class="form-input" id="regEmail" name="email"
+                               placeholder="QQ邮箱 (如 12345@qq.com)" autocomplete="email" required style="flex:1;">
+                        <button type="button" class="btn btn-secondary" id="sendEmailCodeBtn" style="flex-shrink:0;white-space:nowrap;">
+                            <i class="fas fa-paper-plane"></i> <span id="sendEmailCodeText">发送验证码</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="regEmailCode">
+                        <i class="fas fa-shield-alt"></i> 邮箱验证码
+                    </label>
+                    <input type="text" class="form-input" id="regEmailCode" name="email_code"
+                           placeholder="输入邮箱验证码" autocomplete="off" required maxlength="6">
+                </div>
+                <div class="form-group">
                     <label class="form-label">
                         <i class="fas fa-shield-alt"></i> 图形验证码
                     </label>
@@ -1589,10 +1666,13 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         <div class="topbar-brand">
             <div class="brand-icon"><i class="fas fa-terminal"></i></div>
             <span class="brand-name">PocketTerm</span>
-            <span class="brand-version">v1.5</span>
+            <span class="brand-version">v2.0</span>
         </div>
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
+            <div class="topbar-balance" id="topbarBalance" title="账户余额" style="display:none;">
+                <i class="fas fa-coins"></i> <span id="topbarBalanceText">余额: --</span>
+            </div>
             <button class="theme-toggle" id="themeToggle" aria-label="切换主题" title="切换主题">
                 <i class="fas fa-moon"></i>
             </button>
@@ -1654,6 +1734,14 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     <i class="fas fa-bullhorn nav-icon"></i>
                     <span class="nav-label">公告</span>
                 </div>
+                <div class="nav-item" data-view="shop">
+                    <i class="fas fa-store nav-icon"></i>
+                    <span class="nav-label">商店</span>
+                </div>
+                <div class="nav-item" data-view="files">
+                    <i class="fas fa-folder nav-icon"></i>
+                    <span class="nav-label">文件管理</span>
+                </div>
             </div>
 
             <div class="sidebar-divider" id="adminDivider" style="display:none;"></div>
@@ -1683,6 +1771,18 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <div class="nav-item" data-view="admin-ann-logs">
                     <i class="fas fa-list-alt nav-icon"></i>
                     <span class="nav-label">公告日志</span>
+                </div>
+                <div class="nav-item" data-view="admin-orders">
+                    <i class="fas fa-receipt nav-icon"></i>
+                    <span class="nav-label">订单管理</span>
+                </div>
+                <div class="nav-item" data-view="admin-review">
+                    <i class="fas fa-check-circle nav-icon"></i>
+                    <span class="nav-label">审核文件</span>
+                </div>
+                <div class="nav-item" data-view="admin-balance">
+                    <i class="fas fa-coins nav-icon"></i>
+                    <span class="nav-label">用户余额</span>
                 </div>
             </div>
         </nav>
@@ -1745,11 +1845,16 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-clock"></i> 最近活动</div>
-                        <button class="btn btn-ghost btn-sm" id="refreshActivity">
-                            <i class="fas fa-sync-alt"></i> 刷新
-                        </button>
+                        <div style="display:flex;gap:6px;">
+                            <button class="btn btn-ghost btn-sm" id="toggleActivity" title="折叠/展开" aria-label="折叠或展开最近活动">
+                                <i class="fas fa-chevron-up" id="toggleActivityIcon"></i>
+                            </button>
+                            <button class="btn btn-ghost btn-sm" id="refreshActivity">
+                                <i class="fas fa-sync-alt"></i> 刷新
+                            </button>
+                        </div>
                     </div>
-                    <div class="card-body">
+                    <div class="card-body activity-collapse" id="activityCollapse">
                         <div class="activity-list" id="activityList">
                             <div class="empty-state">
                                 <i class="fas fa-inbox"></i>
@@ -2589,6 +2694,145 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                             <p style="font-size:13px;">加载中...</p>
                         </div>
                     </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Shop (商店)
+             ================================================================== -->
+        <section class="view" id="view-shop">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-store"></i> 商店</div>
+                    <div class="page-subtitle">使用余额购买卡密和文件</div>
+                </div>
+                <div class="page-actions">
+                    <span class="topbar-balance" id="shopBalance"><i class="fas fa-coins"></i> <span id="shopBalanceText">0.00</span></span>
+                </div>
+            </div>
+            <div class="dashboard-grid">
+                <div class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-key"></i> 卡密板块</div></div>
+                    <div class="card-body"><div class="products-grid" id="cardProducts"></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-plug"></i> 插件文件</div></div>
+                    <div class="card-body"><div class="products-grid" id="pluginProducts"></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-cube"></i> 建筑文件</div></div>
+                    <div class="card-body"><div class="products-grid" id="buildingProducts"></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-receipt"></i> 我的订单</div></div>
+                    <div class="card-body"><div id="myOrders" style="max-height:400px;overflow-y:auto;"></div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Files (文件管理)
+             ================================================================== -->
+        <section class="view" id="view-files">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-folder"></i> 文件管理</div>
+                    <div class="page-subtitle">上传和管理文件</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-primary btn-sm" id="showUploadBtn"><i class="fas fa-upload"></i> 上传文件</button>
+                </div>
+            </div>
+            <!-- Upload form (hidden by default) -->
+            <div class="card" id="uploadFormCard" style="display:none;margin-bottom:16px;">
+                <div class="card-header"><div class="card-title"><i class="fas fa-upload"></i> 上传新文件</div></div>
+                <div class="card-body">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                        <div><div class="form-group"><label class="form-label">文件名称 (最多18字)</label><input type="text" class="form-input" id="uploadName" maxlength="18" placeholder="文件名称"></div></div>
+                        <div><div class="form-group"><label class="form-label">分类</label><select class="form-input" id="uploadCategory"><option value="plugin">插件</option><option value="building">建筑</option></select></div></div>
+                        <div><div class="form-group"><label class="form-label">价格 (余额)</label><input type="number" class="form-input" id="uploadPrice" min="0" step="0.01" value="0" placeholder="0为免费"></div></div>
+                        <div><div class="form-group"><label class="form-label">选择文件 (最大512KB)</label><input type="file" class="form-input" id="uploadFile"></div></div>
+                    </div>
+                    <div class="form-group" style="margin-top:8px;"><label class="form-label">介绍 (最多60字)</label><textarea class="form-input" id="uploadDesc" maxlength="60" rows="2" placeholder="文件介绍"></textarea></div>
+                    <button class="btn btn-primary btn-sm" id="confirmUploadBtn" style="margin-top:8px;"><i class="fas fa-check"></i> 确认上传</button>
+                </div>
+            </div>
+            <div class="dashboard-grid">
+                <div class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-plug"></i> 插件文件</div></div>
+                    <div class="card-body"><div id="pluginFilesList"></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-cube"></i> 建筑文件</div></div>
+                    <div class="card-body"><div id="buildingFilesList"></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-user"></i> 我的文件</div></div>
+                    <div class="card-body"><div id="myFilesList" style="max-height:400px;overflow-y:auto;"></div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin - Orders (订单管理)
+             ================================================================== -->
+        <section class="view" id="view-admin-orders">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-receipt"></i> 订单管理</div>
+                    <div class="page-subtitle">查看和搜索订单</div>
+                </div>
+                <div class="page-actions">
+                    <input type="text" class="form-input" id="orderSearchInput" placeholder="搜索订单号或用户名" style="width:200px;display:inline-block;">
+                    <button class="btn btn-primary btn-sm" id="searchOrderBtn"><i class="fas fa-search"></i> 搜索</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body" style="padding:0;">
+                    <div id="adminOrdersList" style="max-height:600px;overflow-y:auto;"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin - Review (文件审核)
+             ================================================================== -->
+        <section class="view" id="view-admin-review">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-check-circle"></i> 文件审核</div>
+                    <div class="page-subtitle">审核用户上传的文件</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-secondary btn-sm" id="refreshReviewBtn"><i class="fas fa-sync-alt"></i> 刷新</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body"><div id="reviewFilesList"></div></div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Admin - Balance (用户余额管理)
+             ================================================================== -->
+        <section class="view" id="view-admin-balance">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-coins"></i> 用户余额管理</div>
+                    <div class="page-subtitle">管理用户余额</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body">
+                    <div class="form-group" style="margin-bottom:16px;">
+                        <label class="form-label">用户名</label>
+                        <input type="text" class="form-input" id="balanceUsername" placeholder="输入用户名" style="display:inline-block;width:200px;">
+                        <label class="form-label" style="margin-left:12px;">余额</label>
+                        <input type="number" class="form-input" id="balanceAmount" placeholder="0.00" style="display:inline-block;width:120px;">
+                        <button class="btn btn-primary btn-sm" id="setBalanceBtn" style="margin-left:8px;"><i class="fas fa-check"></i> 设置余额</button>
+                    </div>
+                    <div id="usersBalanceList" style="max-height:500px;overflow-y:auto;"></div>
                 </div>
             </div>
         </section>

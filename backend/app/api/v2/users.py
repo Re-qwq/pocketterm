@@ -1,10 +1,16 @@
-"""用户认证 API - 注册、登录、卡密验证。"""
+"""用户认证 API - 注册、登录、卡密验证、邮箱验证。"""
 from __future__ import annotations
 
+import logging
+import os
+import re
+import secrets
 import time
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.database import get_db
@@ -19,6 +25,8 @@ from app.security import (
 )
 from .captcha import generate_captcha, verify_captcha
 
+logger = logging.getLogger("pocketterm.api.users")
+
 router = APIRouter(prefix="/api/v2/auth", tags=["auth"])
 
 
@@ -32,6 +40,8 @@ class RegisterRequest(BaseModel):
     card_key: str = Field(..., description="注册卡密")
     captcha_answer: str = Field(..., description="图形验证码答案")
     captcha_id: str = Field(..., description="验证码 ID")
+    email: str = Field("", description="邮箱 (可选，QQ邮箱: @qq.com / @foxmail.com)")
+    email_code: str = Field("", description="邮箱验证码 (填写邮箱时必填)")
 
 
 class LoginRequest(BaseModel):
@@ -49,6 +59,107 @@ class CreateUserRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=100)
     role: str = Field("user", description="角色: user/admin")
     duration_days: Optional[int] = Field(None, description="有效期天数，None=永久")
+    email: str = Field("", description="邮箱 (可选，管理员创建无需验证)")
+
+
+class SendEmailCodeRequest(BaseModel):
+    email: str = Field(..., description="QQ邮箱 (@qq.com / @foxmail.com)")
+
+
+class VerifyEmailCodeRequest(BaseModel):
+    email: str = Field(..., description="邮箱")
+    code: str = Field(..., description="验证码")
+
+
+# ============================================================================
+# 邮箱相关辅助函数
+# ============================================================================
+
+#: QQ 邮箱后缀
+_QQ_EMAIL_SUFFIXES = ("@qq.com", "@foxmail.com")
+
+#: 邮箱验证码有效期 (秒)
+EMAIL_CODE_EXPIRE_SECONDS = 5 * 60
+
+
+def _is_qq_email(email: str) -> bool:
+    """判断是否为 QQ 邮箱 (@qq.com / @foxmail.com)。"""
+    if not email:
+        return False
+    email_lower = email.strip().lower()
+    return email_lower.endswith(_QQ_EMAIL_SUFFIXES)
+
+
+def _extract_qq_number(email: str) -> Optional[str]:
+    """从 QQ 邮箱中提取 QQ 号 (如 12345@qq.com -> 12345)。"""
+    if not _is_qq_email(email):
+        return None
+    email_lower = email.strip().lower()
+    for suffix in _QQ_EMAIL_SUFFIXES:
+        if email_lower.endswith(suffix):
+            number = email_lower[: -len(suffix)]
+            if number.isdigit():
+                return number
+    return None
+
+
+def _qq_avatar(email: str) -> str:
+    """根据 QQ 邮箱生成 QQ 头像 URL。"""
+    number = _extract_qq_number(email)
+    if number:
+        return f"https://q1.qlogo.cn/g?b=qq&nk={number}&s=100"
+    return ""
+
+
+def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
+    """通过 SMTP 发送邮件。
+
+    SMTP 配置从环境变量读取::
+
+        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
+
+    若未配置 SMTP，仅记录日志并返回 False (验证码仍已入库，便于开发调试)。
+    """
+    host = os.environ.get("SMTP_HOST", "").strip()
+    port = int(os.environ.get("SMTP_PORT", "465"))
+    user = os.environ.get("SMTP_USER", "").strip()
+    password = os.environ.get("SMTP_PASS", "").strip()
+    sender = os.environ.get("SMTP_FROM", "").strip() or user
+
+    if not host or not user or not password:
+        logger.warning(
+            "SMTP 未配置 (SMTP_HOST/SMTP_USER/SMTP_PASS)，跳过邮件发送: %s",
+            to_email,
+        )
+        return False
+
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        msg = MIMEMultipart()
+        msg["From"] = sender
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        # 465 -> SMTP_SSL，其他端口 -> SMTP + STARTTLS
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=15) as server:
+                server.login(user, password)
+                server.sendmail(sender, [to_email], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(user, password)
+                server.sendmail(sender, [to_email], msg.as_string())
+        logger.info("邮件发送成功: %s", to_email)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("邮件发送失败 (%s): %s", to_email, exc)
+        return False
 
 
 # ============================================================================
@@ -85,18 +196,56 @@ async def register(req: RegisterRequest, request: Request):
     if existing:
         raise HTTPException(status_code=400, detail="用户名已存在")
 
+    # 3b. 邮箱验证 (可选)
+    email = ""
+    avatar = ""
+    if req.email and req.email.strip():
+        email = req.email.strip().lower()
+        # 校验 QQ 邮箱格式
+        if not _is_qq_email(email):
+            raise HTTPException(
+                status_code=400,
+                detail="邮箱格式不正确，仅支持 @qq.com 或 @foxmail.com 邮箱",
+            )
+        # 检查邮箱是否已被注册
+        email_row = await (await db.conn.execute(
+            "SELECT user_id FROM users WHERE email = ? AND email != ''", (email,)
+        )).fetchone()
+        if email_row:
+            raise HTTPException(status_code=400, detail="该邮箱已被注册")
+        # 校验邮箱验证码
+        if not req.email_code:
+            raise HTTPException(status_code=400, detail="请填写邮箱验证码")
+        code_row = await (await db.conn.execute(
+            "SELECT * FROM email_verifications WHERE email = ? AND code = ? "
+            "AND used = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
+            (email, req.email_code.strip(), time.time()),
+        )).fetchone()
+        if code_row is None:
+            raise HTTPException(status_code=400, detail="邮箱验证码错误或已过期")
+        # 标记验证码已使用
+        await db.conn.execute(
+            "UPDATE email_verifications SET used = 1 WHERE id = ?",
+            (code_row["id"],),
+        )
+        await db.conn.commit()
+        # 生成 QQ 头像
+        avatar = _qq_avatar(email)
+
     # 4. 计算过期时间
     expire_at = None
     if card["duration_days"]:
         expire_at = time.time() + card["duration_days"] * 86400
 
-    # 5. 创建用户
+    # 5. 创建用户 (写入 email / avatar)
     user_id = await db.create_user(
         username=req.username,
         password_hash=hash_password(req.password),
         role="user",
         created_by=card["card_id"],
         expire_at=expire_at,
+        email=email,
+        avatar=avatar,
     )
 
     # 6. 标记卡密已使用
@@ -146,6 +295,93 @@ async def get_captcha_debug(captcha_id: str):
 
 
 # ============================================================================
+# 邮箱验证码
+# ============================================================================
+
+@router.post("/email/send")
+async def send_email_code(req: SendEmailCodeRequest, request: Request):
+    """发送邮箱验证码到 QQ 邮箱。
+
+    流程:
+        1. 校验邮箱格式
+        2. 检查邮箱是否已被注册 (任务要求: 先检查)
+        3. 频率限制 (IP 5次/分钟, 单邮箱 1次/分钟)
+        4. 生成 6 位数字验证码
+        5. 存入 email_verifications 表 (5 分钟有效期)
+        6. 通过 SMTP 发送 (未配置 SMTP 时仅入库，便于开发)
+    """
+    client_ip = request.client.host if request.client else ""
+    email = req.email.strip().lower()
+
+    # 1. 校验邮箱格式
+    if not _is_qq_email(email):
+        raise HTTPException(
+            status_code=400,
+            detail="邮箱格式不正确，仅支持 @qq.com 或 @foxmail.com 邮箱",
+        )
+
+    db = await get_db()
+
+    # 2. 检查邮箱是否已被注册 (任务要求: 先检查)
+    email_row = await (await db.conn.execute(
+        "SELECT user_id FROM users WHERE email = ? AND email != ''", (email,)
+    )).fetchone()
+    if email_row:
+        raise HTTPException(status_code=400, detail="该邮箱已被注册")
+
+    # 3. 频率限制 (IP 5次/分钟, 单邮箱 1次/分钟)
+    if not rate_limiter.check(f"email_send_ip:{client_ip}", max_requests=5, window=60):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请1分钟后再试")
+    if not rate_limiter.check(f"email_send_email:{email}", max_requests=1, window=60):
+        raise HTTPException(status_code=429, detail="该邮箱请求过于频繁，请1分钟后再试")
+
+    # 4. 生成 6 位数字验证码
+    code = f"{secrets.randbelow(1000000):06d}"
+    now = time.time()
+    code_id = f"ev_{uuid.uuid4().hex[:12]}"
+
+    # 5. 写入验证码表
+    await db.conn.execute(
+        """INSERT INTO email_verifications (id, email, code, expires_at, used, created_at)
+           VALUES (?, ?, ?, ?, 0, ?)""",
+        (code_id, email, code, now + EMAIL_CODE_EXPIRE_SECONDS, now),
+    )
+    await db.conn.commit()
+
+    # 6. 发送邮件 (失败不影响接口返回，验证码已入库)
+    subject = "PocketTerm 邮箱验证码"
+    body = (
+        f"您的 PocketTerm 验证码是: {code}\n\n"
+        f"验证码 5 分钟内有效，请勿泄露给他人。\n"
+        f"如非本人操作，请忽略此邮件。"
+    )
+    sent = _send_email_smtp(email, subject, body)
+
+    return {
+        "success": True,
+        "message": "验证码已发送" if sent else "验证码已生成 (未配置SMTP，请查看日志)",
+    }
+
+
+@router.post("/email/verify")
+async def verify_email_code(req: VerifyEmailCodeRequest, request: Request):
+    """验证邮箱验证码 (不标记为已使用，注册时才标记)。"""
+    email = req.email.strip().lower()
+    code = req.code.strip()
+
+    db = await get_db()
+    row = await (await db.conn.execute(
+        "SELECT * FROM email_verifications WHERE email = ? AND code = ? "
+        "AND used = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
+        (email, code, time.time()),
+    )).fetchone()
+    if row is None:
+        raise HTTPException(status_code=400, detail="验证码错误或已过期")
+
+    return {"success": True, "message": "验证码正确"}
+
+
+# ============================================================================
 # 登录
 # ============================================================================
 
@@ -165,8 +401,19 @@ async def login(req: LoginRequest, request: Request, response: Response):
         report_suspicious(f"login:{client_ip}")
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
+    # 在校验密码前先检查账号状态，返回友好的中文提示
+    if user["status"] == "banned":
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "您已被禁止登录，请联系管理员"},
+        )
+    if user["status"] == "suspended":
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "账号已被暂停，请联系管理员"},
+        )
     if user["status"] != "active":
-        raise HTTPException(status_code=403, detail=f"账号已被暂停或封禁: {user['status']}")
+        raise HTTPException(status_code=403, detail=f"账号状态异常: {user['status']}")
 
     if not verify_password(req.password, user["password_hash"]):
         report_suspicious(f"login:{client_ip}")
@@ -323,6 +570,9 @@ async def get_me(request: Request):
             "created_at": user["created_at"],
             "expire_at": user["expire_at"],
             "must_change_password": bool(user["must_change_password"]),
+            "balance": user.get("balance", 0),
+            "email": user.get("email", ""),
+            "avatar": user.get("avatar", ""),
         },
     }
 
@@ -429,12 +679,18 @@ async def create_user(req: CreateUserRequest, request: Request):
     if req.duration_days:
         expire_at = time.time() + req.duration_days * 86400
 
+    # 管理员创建的用户无需邮箱验证，但仍可写入邮箱
+    admin_email = req.email.strip().lower() if req.email else ""
+    admin_avatar = _qq_avatar(admin_email) if admin_email else ""
+
     user_id = await db.create_user(
         username=req.username,
         password_hash=hash_password(req.password),
         role=req.role,
         created_by=admin["user_id"],
         expire_at=expire_at,
+        email=admin_email,
+        avatar=admin_avatar,
     )
 
     await db.add_log(

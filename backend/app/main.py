@@ -75,6 +75,8 @@ from app.api.v2.logs import router as v2_logs_router
 from app.api.v2.system_admin import router as v2_system_admin_router
 from app.api.v2.announcements import router as v2_announcements_router
 from app.api.v2.sauth_refresh import router as v2_sauth_refresh_router
+from app.api.v2.shop import router as v2_shop_router
+from app.api.v2.user_files import router as v2_user_files_router
 
 
 __all__ = ["app", "lifespan"]
@@ -480,6 +482,8 @@ app.include_router(v2_logs_router)
 app.include_router(v2_system_admin_router)
 app.include_router(v2_announcements_router)
 app.include_router(v2_sauth_refresh_router)
+app.include_router(v2_shop_router)
+app.include_router(v2_user_files_router)
 
 
 if __name__ == "__main__":

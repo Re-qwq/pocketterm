@@ -178,16 +178,34 @@
             throw { type: "network", message: "网络连接失败" };
         }
 
-        // 401 - 未授权 / 登录过期
+        // 401 - 未授权 / 登录过期 / 登录请求被拒
         if (response.status === 401) {
-            handleUnauthorized();
-            throw { type: "auth", message: "登录已过期，请重新登录" };
+            // 尝试解析后端返回的具体原因 (如 "用户名或密码错误")
+            let detail = null;
+            try {
+                const data = await response.json();
+                detail = extractApiMessage(data);
+            } catch (_) { /* 响应非 JSON */ }
+            // 已有会话 -> 视为登录过期并清理; 否则视为登录/认证请求被拒, 仅提示不清理
+            if (state.currentUser || state.token) {
+                handleUnauthorized(detail);
+            } else {
+                toastError(detail || "用户名或密码错误");
+            }
+            throw { type: "auth", status: 401, message: detail || "登录已过期，请重新登录" };
         }
 
-        // 403 - 无权限
+        // 403 - 无权限 / 账号被禁用等
         if (response.status === 403) {
-            toastError("没有权限执行此操作");
-            throw { type: "forbidden", message: "没有权限" };
+            // 优先展示后端具体原因 (如 "您已被禁止登录")
+            let detail = null;
+            try {
+                const data = await response.json();
+                detail = extractApiMessage(data);
+            } catch (_) { /* 响应非 JSON */ }
+            const msg = detail || "没有权限执行此操作";
+            toastError(msg);
+            throw { type: "forbidden", status: 403, message: msg };
         }
 
         // 其他非 2xx 状态码
@@ -195,15 +213,8 @@
             let msg = `请求失败 (${response.status})`;
             try {
                 const data = await response.json();
-                if (data.detail) {
-                    msg = typeof data.detail === "string"
-                        ? data.detail
-                        : JSON.stringify(data.detail);
-                } else if (data.message) {
-                    msg = data.message;
-                } else if (data.error) {
-                    msg = data.error;
-                }
+                const extracted = extractApiMessage(data);
+                if (extracted) msg = extracted;
             } catch (_) { /* 响应非 JSON，使用默认消息 */ }
             toastError(msg);
             throw { type: "http", status: response.status, message: msg };
@@ -218,14 +229,41 @@
     }
 
     /** 处理未授权 (401) - 清除状态并返回登录界面 */
-    function handleUnauthorized() {
+    function handleUnauthorized(customMsg) {
         // 登录过期, 主动关闭 WebSocket
         closeWebSocket();
         state.currentUser = null;
         state.token = null;
         localStorage.removeItem(TOKEN_KEY);
         showAuthScreen();
-        toastWarn("登录已过期，请重新登录");
+        // 优先使用后端返回的具体原因 (如有)
+        toastWarn(customMsg || "登录已过期，请重新登录");
+    }
+
+    /**
+     * 从后端响应体中提取可读的错误信息
+     * 兼容 {detail: "..."} / {message: "..."} / {error: "..."} 以及
+     * FastAPI 校验错误 {detail: [{msg: "..."}, ...]}
+     * @param {object} data - 已解析的响应 JSON
+     * @returns {string|null} 提取出的消息, 无则返回 null
+     */
+    function extractApiMessage(data) {
+        if (!data) return null;
+        if (typeof data === "string") return data;
+        if (data.detail) {
+            if (typeof data.detail === "string") return data.detail;
+            if (Array.isArray(data.detail)) {
+                // FastAPI 校验错误: [{msg, loc, ...}, ...]
+                const parts = data.detail
+                    .map((e) => (e && typeof e === "object" && e.msg) ? e.msg : String(e))
+                    .filter(Boolean);
+                return parts.length ? parts.join("; ") : JSON.stringify(data.detail);
+            }
+            return JSON.stringify(data.detail);
+        }
+        if (data.message) return typeof data.message === "string" ? data.message : JSON.stringify(data.message);
+        if (data.error) return typeof data.error === "string" ? data.error : JSON.stringify(data.error);
+        return null;
     }
 
     /* ======================================================================
@@ -305,6 +343,20 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
+    }
+
+    /**
+     * 转义字符串以安全嵌入 onclick 属性 (单引号 JS 字符串 + 双引号 HTML 属性)
+     * @param {string} str - 原始字符串
+     * @returns {string} 转义后的字符串
+     */
+    function escAttr(str) {
+        if (str === null || str === undefined) return "";
+        return String(str)
+            .replace(/\\/g, "\\\\")
+            .replace(/'/g, "\\'")
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;");
     }
 
     /**
@@ -608,17 +660,99 @@
                     if (meRes.success) state.currentUser = meRes.data;
                 }
                 toastSuccess("登录成功");
+                // showApp() 内部已通过 switchView("dashboard") -> loadDashboard() 加载数据,
+                // 无需在此重复调用, 否则会触发两次 loadStats/loadActivity 造成闪烁与重复请求
                 showApp();
-                await loadDashboard();
             } else {
-                toastError(res.message || "登录失败");
+                // 优先展示后端返回的具体原因 (message / detail), 如 "您已被禁止登录"
+                toastError(res.message || res.detail || "登录失败");
             }
         } catch (err) {
-            // 错误已由 api() 统一处理
+            // api() 已对 HTTP 错误 (401/403/其它) 做了具体提示; 此处仅兜底未知错误
+            if (err && err.message && err.type === "unknown") {
+                toastError(err.message);
+            }
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> 登录';
         }
+    }
+
+    /** 邮箱验证码倒计时定时器句柄 */
+    let emailCodeTimer = null;
+
+    /**
+     * 发送邮箱验证码
+     * - 校验邮箱格式
+     * - 调用 POST /api/v2/auth/email/send
+     * - 成功后启动 60 秒倒计时, 期间禁用按钮
+     */
+    async function sendEmailCode() {
+        const emailInput = $("regEmail");
+        const btn = $("sendEmailCodeBtn");
+        const textEl = $("sendEmailCodeText");
+        if (!emailInput || !btn || !textEl) return;
+
+        const email = emailInput.value.trim();
+        // 基础邮箱格式校验
+        if (!email) {
+            toastWarn("请先输入QQ邮箱");
+            emailInput.focus();
+            return;
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            toastWarn("邮箱格式不正确");
+            emailInput.focus();
+            return;
+        }
+        // 倒计时进行中则忽略
+        if (emailCodeTimer) return;
+
+        btn.disabled = true;
+        textEl.textContent = "发送中...";
+
+        try {
+            const res = await api("/auth/email/send", {
+                method: "POST",
+                body: { email },
+            });
+            if (res.success) {
+                toastSuccess("验证码已发送至邮箱，请查收");
+                startEmailCodeCountdown(60);
+            } else {
+                toastError(res.message || res.detail || "验证码发送失败");
+                btn.disabled = false;
+                textEl.textContent = "发送验证码";
+            }
+        } catch (err) {
+            // api() 已提示具体错误
+            btn.disabled = false;
+            textEl.textContent = "发送验证码";
+        }
+    }
+
+    /**
+     * 启动邮箱验证码倒计时
+     * @param {number} seconds - 倒计时秒数
+     */
+    function startEmailCodeCountdown(seconds) {
+        const btn = $("sendEmailCodeBtn");
+        const textEl = $("sendEmailCodeText");
+        if (!btn || !textEl) return;
+        let remaining = seconds;
+        btn.disabled = true;
+        textEl.textContent = `重新发送 (${remaining}s)`;
+        emailCodeTimer = setInterval(() => {
+            remaining -= 1;
+            if (remaining <= 0) {
+                clearInterval(emailCodeTimer);
+                emailCodeTimer = null;
+                btn.disabled = false;
+                textEl.textContent = "发送验证码";
+            } else {
+                textEl.textContent = `重新发送 (${remaining}s)`;
+            }
+        }, 1000);
     }
 
     /**
@@ -629,12 +763,22 @@
         const username = $("regUsername").value.trim();
         const password = $("regPassword").value;
         const cardKey = $("regCardKey").value.trim();
+        const email = $("regEmail") ? $("regEmail").value.trim() : "";
+        const emailCode = $("regEmailCode") ? $("regEmailCode").value.trim() : "";
         const captchaAnswer = $("regCaptchaInput").value.trim();
         const captchaId = $("regCaptchaId").value;
         const btn = $("registerBtn");
 
         if (!username || !password || !cardKey || !captchaAnswer) {
             toastWarn("请填写所有必填项");
+            return;
+        }
+        if (!email) {
+            toastWarn("请输入QQ邮箱");
+            return;
+        }
+        if (!emailCode) {
+            toastWarn("请输入邮箱验证码");
             return;
         }
 
@@ -648,6 +792,8 @@
                     username,
                     password,
                     card_key: cardKey,
+                    email,
+                    email_code: emailCode,
                     captcha_answer: captchaAnswer,
                     captcha_id: captchaId,
                 },
@@ -657,12 +803,17 @@
                 // 清空注册表单
                 $("registerForm").reset();
                 state.captchaId = null;
+                // 清除邮箱验证码倒计时
+                if (emailCodeTimer) {
+                    clearInterval(emailCodeTimer);
+                    emailCodeTimer = null;
+                }
                 // 切换到登录
                 switchAuthTab("login");
                 $("loginUsername").value = username;
                 $("loginPassword").focus();
             } else {
-                toastError(res.message || "注册失败");
+                toastError(res.message || res.detail || "注册失败");
                 // 刷新验证码
                 loadCaptcha();
             }
@@ -735,6 +886,8 @@
         updateUserUI();
         // 更新管理员区域可见性
         updateAdminVisibility();
+        // 加载账户余额 (顶部栏显示)
+        loadBalance();
         // 建立 WebSocket 实时连接 (指数退避重连)
         initWebSocket();
         // 默认切换到仪表盘
@@ -844,6 +997,21 @@
                 break;
             case "admin-ann-logs":
                 loadAnnouncementLogs();
+                break;
+            case "shop":
+                loadShop();
+                break;
+            case "files":
+                loadFiles();
+                break;
+            case "admin-orders":
+                loadAdminOrders();
+                break;
+            case "admin-review":
+                loadReviewFiles();
+                break;
+            case "admin-balance":
+                loadUsersBalance();
                 break;
         }
     }
@@ -1045,6 +1213,13 @@
     window.reloadPlugin = reloadPlugin;
     window.switchView = switchView;
     window.deleteComment = deleteComment;
+    // 商店 / 文件 / 管理后台 - 内联按钮调用的函数
+    window.purchaseProduct = purchaseProduct;
+    window.purchaseFile = purchaseFile;
+    window.downloadFile = downloadFile;
+    window.approveFile = approveFile;
+    window.rejectFile = rejectFile;
+    window.copyToClipboard = copyToClipboard;
 
     /**
      * 切换控制台 Tab
@@ -1139,9 +1314,11 @@
     /** 加载统计数据 */
     async function loadStats() {
         try {
+            // 面板范围与 loadPanels 保持一致: 普通用户强制 mine, 管理员按 state.panelScope
+            const panelScope = isAdmin() ? (state.panelScope || "mine") : "mine";
             // 并行加载面板与机器人
             const [panelsRes, botsRes] = await Promise.allSettled([
-                api("/panels"),
+                api(`/panels?scope=${encodeURIComponent(panelScope)}`),
                 api("/bots"),
             ]);
 
@@ -1224,6 +1401,74 @@
         }
     }
 
+    /** localStorage 键名: 最近活动折叠状态 */
+    const ACTIVITY_COLLAPSE_KEY = "pocketterm_activity_collapsed";
+
+    /**
+     * 切换"最近活动"卡片的折叠/展开状态
+     * - 切换 collapsed 类
+     * - 更新按钮图标 (chevron-up / chevron-down)
+     * - 持久化到 localStorage
+     */
+    function toggleActivityCollapse() {
+        const collapse = $("activityCollapse");
+        const icon = $("toggleActivityIcon");
+        if (!collapse) return;
+        const collapsed = collapse.classList.toggle("collapsed");
+        if (icon) {
+            icon.className = collapsed ? "fas fa-chevron-down" : "fas fa-chevron-up";
+        }
+        try {
+            localStorage.setItem(ACTIVITY_COLLAPSE_KEY, collapsed ? "1" : "0");
+        } catch (_) { /* localStorage 不可用时忽略 */ }
+    }
+
+    /** 从 localStorage 恢复"最近活动"折叠状态 (初始化时调用) */
+    function restoreActivityCollapse() {
+        const collapse = $("activityCollapse");
+        const icon = $("toggleActivityIcon");
+        if (!collapse) return;
+        let collapsed = false;
+        try {
+            collapsed = localStorage.getItem(ACTIVITY_COLLAPSE_KEY) === "1";
+        } catch (_) { /* 忽略 */ }
+        collapse.classList.toggle("collapsed", collapsed);
+        if (icon) {
+            icon.className = collapsed ? "fas fa-chevron-down" : "fas fa-chevron-up";
+        }
+    }
+
+    /**
+     * 加载当前用户余额并更新顶部栏显示
+     * 调用 GET /api/v2/shop/balance, 格式化为 "余额: XX.XX"
+     * 接口不可用时静默隐藏余额元素, 不影响主流程
+     */
+    async function loadBalance() {
+        const balanceEl = $("topbarBalance");
+        const textEl = $("topbarBalanceText");
+        if (!balanceEl || !textEl) return;
+        try {
+            const res = await api("/shop/balance");
+            if (res && res.success) {
+                // 兼容 {balance} / {data: {balance}} / {data: <number>} 等返回结构
+                let balance = res.balance;
+                if (balance === undefined && res.data !== undefined) {
+                    balance = (res.data && res.data.balance !== undefined) ? res.data.balance : res.data;
+                }
+                const num = parseFloat(balance);
+                const formatted = isNaN(num) ? "0.00" : num.toFixed(2);
+                textEl.textContent = "余额: " + formatted;
+                balanceEl.style.display = "";
+            } else {
+                // 接口存在但未返回成功 -> 隐藏余额显示
+                balanceEl.style.display = "none";
+            }
+        } catch (_) {
+            // 余额接口不可用 (如未部署商店模块) -> 静默隐藏, 不打扰用户
+            balanceEl.style.display = "none";
+        }
+    }
+
     /* ======================================================================
        11. 面板管理
        ====================================================================== */
@@ -1242,7 +1487,25 @@
                 $("badgePanels").textContent = state.panels.length;
                 $("statPanels").textContent = state.panels.length;
             }
-        } catch (_) { /* 已处理 */ }
+        } catch (err) {
+            // 不再静默失败: 在面板网格中展示具体错误信息, 避免用户看到空白而困惑
+            const reason = (err && err.message) ? err.message : "未知错误";
+            if (grid) {
+                grid.innerHTML = `
+                    <div class="empty-state" style="grid-column:1/-1;">
+                        <i class="fas fa-exclamation-triangle" style="color:var(--color-danger);"></i>
+                        <h3>面板加载失败</h3>
+                        <p>${escapeHtml(reason)}</p>
+                        <button class="btn btn-secondary btn-sm" style="margin-top:12px;" onclick="window.__pockettermReloadPanels && window.__pockettermReloadPanels()">
+                            <i class="fas fa-sync-alt"></i> 重试
+                        </button>
+                    </div>`;
+            }
+            // 重置徽章与统计, 避免显示陈旧数据
+            state.panels = [];
+            $("badgePanels").textContent = "0";
+            $("statPanels").textContent = "0";
+        }
     }
 
     /**
@@ -2795,11 +3058,11 @@
             const message = log.message || log.action || log.detail || "";
             const source = log.source || log.target_type || "";
             return `
-                <div style="display:flex;gap:10px;padding:8px 12px;border-bottom:1px solid #21262d;font-family:var(--font-mono);font-size:12px;line-height:1.6;">
-                    <span style="color:#484f58;flex-shrink:0;min-width:140px;">${escapeHtml(time)}</span>
-                    <span style="color:${color};font-weight:600;flex-shrink:0;min-width:60px;text-transform:uppercase;">${escapeHtml(level)}</span>
-                    ${source ? `<span style="color:#7d8590;flex-shrink:0;min-width:80px;">[${escapeHtml(source)}]</span>` : ""}
-                    <span style="color:#e6edf3;word-break:break-word;flex:1;">${escapeHtml(message)}</span>
+                <div style="display:flex;flex-wrap:wrap;gap:4px 10px;padding:8px 12px;border-bottom:1px solid #21262d;font-family:var(--font-mono);font-size:12px;line-height:1.6;writing-mode:horizontal-tb;">
+                    <span style="color:#484f58;flex-shrink:0;white-space:nowrap;">${escapeHtml(time)}</span>
+                    <span style="color:${color};font-weight:600;flex-shrink:0;white-space:nowrap;text-transform:uppercase;">${escapeHtml(level)}</span>
+                    ${source ? `<span style="color:#7d8590;flex-shrink:0;white-space:nowrap;">[${escapeHtml(source)}]</span>` : ""}
+                    <span style="color:#e6edf3;word-break:break-word;flex:1 1 240px;min-width:240px;">${escapeHtml(message)}</span>
                 </div>
             `;
         }).join("");
@@ -2998,6 +3261,595 @@
     }
 
     /* ======================================================================
+       19b. 商店 / 文件管理 / 管理后台 (Shop / Files / Admin)
+       ====================================================================== */
+
+    /* -------------------- 商店 (Shop) -------------------- */
+
+    /**
+     * 加载商店数据: 商品列表、余额、订单
+     */
+    async function loadShop() {
+        // 并行加载商品、余额、订单
+        const [productsRes, balanceRes, ordersRes] = await Promise.allSettled([
+            api("/shop/products"),
+            api("/shop/balance"),
+            api("/shop/orders"),
+        ]);
+
+        // 渲染余额
+        if (balanceRes.status === "fulfilled" && balanceRes.value) {
+            const bal = balanceRes.value;
+            const balance = bal.balance != null ? bal.balance : (bal.data && bal.data.balance != null ? bal.data.balance : 0);
+            if ($("shopBalanceText")) $("shopBalanceText").textContent = parseFloat(balance).toFixed(2);
+        }
+
+        // 渲染商品 (按分类分组)
+        let products = [];
+        if (productsRes.status === "fulfilled" && productsRes.value) {
+            products = productsRes.value.data || productsRes.value || [];
+        }
+        if (!Array.isArray(products)) products = [];
+        const cards = products.filter((p) => (p.category || p.type || "") === "card");
+        const plugins = products.filter((p) => (p.category || p.type || "") === "plugin");
+        const buildings = products.filter((p) => (p.category || p.type || "") === "building");
+        renderProducts(cards, "cardProducts");
+        renderProducts(plugins, "pluginProducts");
+        renderProducts(buildings, "buildingProducts");
+
+        // 渲染订单
+        let orders = [];
+        if (ordersRes.status === "fulfilled" && ordersRes.value) {
+            orders = ordersRes.value.data || ordersRes.value || [];
+        }
+        if (!Array.isArray(orders)) orders = [];
+        renderOrders(orders, "myOrders");
+    }
+
+    /**
+     * 购买商品
+     * @param {number|string} productId - 商品 ID
+     * @param {string} productName - 商品名称
+     * @param {number} price - 价格
+     */
+    async function purchaseProduct(productId, productName, price) {
+        if (!confirm(`确定要购买「${productName}」吗？将扣除 ${parseFloat(price).toFixed(2)} 余额。`)) return;
+        try {
+            const res = await api("/shop/purchase", {
+                method: "POST",
+                body: { product_id: productId },
+            });
+            if (res.success !== false) {
+                toastSuccess("购买成功");
+                // 显示卡密 (如果有)
+                const cardKey = res.card_key || (res.data && res.data.card_key);
+                if (cardKey) {
+                    toastInfo("卡密: " + cardKey);
+                    copyToClipboard(cardKey);
+                }
+                // 重新加载商店 (刷新余额与订单)
+                loadShop();
+            }
+        } catch (err) {
+            // 错误已由 api() 处理
+        }
+    }
+
+    /**
+     * 渲染商品卡片
+     * @param {array} products - 商品数组
+     * @param {string} containerId - 容器元素 ID
+     */
+    function renderProducts(products, containerId) {
+        const container = $(containerId);
+        if (!container) return;
+        // 设置网格布局
+        container.style.display = "grid";
+        container.style.gridTemplateColumns = "repeat(auto-fill,minmax(200px,1fr))";
+        container.style.gap = "12px";
+        if (!products || products.length === 0) {
+            container.innerHTML = renderEmptyState("fa-box-open", "暂无商品", "该分类下暂无可用商品");
+            return;
+        }
+        container.innerHTML = products.map((p) => {
+            const id = p.id || p.product_id;
+            const name = p.name || p.product_name || "未命名";
+            const desc = p.description || p.desc || "";
+            const price = parseFloat(p.price || 0).toFixed(2);
+            return `
+                <div style="padding:14px;border:1px solid var(--border-muted);border-radius:10px;background:var(--bg-elevated);display:flex;flex-direction:column;gap:8px;">
+                    <div style="font-weight:600;font-size:14px;color:var(--text-primary);word-break:break-word;">${escapeHtml(name)}</div>
+                    ${desc ? `<div style="font-size:12px;color:var(--text-tertiary);flex:1;word-break:break-word;">${escapeHtml(desc)}</div>` : '<div style="flex:1;"></div>'}
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                        <span style="color:#3fb950;font-weight:700;font-size:15px;"><i class="fas fa-coins"></i> ${escapeHtml(price)}</span>
+                        <button class="btn btn-primary btn-sm" onclick="purchaseProduct('${escAttr(id)}','${escAttr(name)}',${escapeHtml(price)})"><i class="fas fa-shopping-cart"></i> 购买</button>
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    /**
+     * 渲染订单列表
+     * @param {array} orders - 订单数组
+     * @param {string} containerId - 容器元素 ID
+     */
+    function renderOrders(orders, containerId) {
+        const container = $(containerId);
+        if (!container) return;
+        if (!orders || orders.length === 0) {
+            container.innerHTML = renderEmptyState("fa-receipt", "暂无订单", "购买的商品订单将显示在这里");
+            return;
+        }
+        container.innerHTML = orders.map((o) => {
+            const orderId = o.order_id || o.id || "-";
+            const productName = o.product_name || o.name || "-";
+            const price = parseFloat(o.price || 0).toFixed(2);
+            const time = formatTime(o.created_at || o.created || o.date);
+            const cardKey = o.card_key || o.cardkey || "";
+            return `
+                <div style="padding:12px;border-bottom:1px solid var(--border-muted);">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-weight:600;font-size:13px;color:var(--text-primary);">${escapeHtml(productName)}</div>
+                            <div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">订单号: ${escapeHtml(orderId)}</div>
+                            <div style="font-size:11px;color:var(--text-tertiary);">${escapeHtml(time)}</div>
+                            ${cardKey ? `<div style="margin-top:6px;padding:6px 8px;background:var(--bg-secondary);border-radius:6px;font-size:12px;color:var(--color-success);word-break:break-all;"><i class="fas fa-key"></i> ${escapeHtml(cardKey)} <button class="btn btn-secondary btn-sm" style="margin-left:4px;padding:2px 6px;font-size:11px;" onclick="copyToClipboard('${escAttr(cardKey)}')"><i class="fas fa-copy"></i></button></div>` : ""}
+                        </div>
+                        <span style="color:#3fb950;font-weight:600;font-size:13px;white-space:nowrap;"><i class="fas fa-coins"></i> ${escapeHtml(price)}</span>
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    /* -------------------- 文件管理 (Files) -------------------- */
+
+    /**
+     * 加载文件列表: 插件、建筑、我的文件
+     */
+    async function loadFiles() {
+        const [pluginRes, buildingRes, myRes] = await Promise.allSettled([
+            api("/files/list?category=plugin"),
+            api("/files/list?category=building"),
+            api("/files/my"),
+        ]);
+
+        let plugins = [], buildings = [], myFiles = [];
+        if (pluginRes.status === "fulfilled" && pluginRes.value) {
+            plugins = pluginRes.value.data || pluginRes.value || [];
+        }
+        if (buildingRes.status === "fulfilled" && buildingRes.value) {
+            buildings = buildingRes.value.data || buildingRes.value || [];
+        }
+        if (myRes.status === "fulfilled" && myRes.value) {
+            myFiles = myRes.value.data || myRes.value || [];
+        }
+        if (!Array.isArray(plugins)) plugins = [];
+        if (!Array.isArray(buildings)) buildings = [];
+        if (!Array.isArray(myFiles)) myFiles = [];
+        renderFileList(plugins, "pluginFilesList");
+        renderFileList(buildings, "buildingFilesList");
+        renderMyFiles(myFiles, "myFilesList");
+    }
+
+    /**
+     * 显示/隐藏上传表单
+     */
+    function toggleUploadForm() {
+        const card = $("uploadFormCard");
+        if (card) card.style.display = card.style.display === "none" ? "block" : "none";
+    }
+
+    /**
+     * 处理文件上传 (商店文件)
+     */
+    async function handleShopFileUpload() {
+        const name = $("uploadName").value.trim();
+        const category = $("uploadCategory").value;
+        const price = $("uploadPrice").value;
+        const desc = $("uploadDesc").value.trim();
+        const fileInput = $("uploadFile");
+        const file = fileInput.files[0];
+
+        if (!name) { toastWarn("请输入文件名称"); return; }
+        if (!file) { toastWarn("请选择文件"); return; }
+        if (file.size > 512 * 1024) { toastWarn("文件大小不能超过 512KB"); return; }
+
+        const btn = $("confirmUploadBtn");
+        const oldHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 上传中...';
+
+        try {
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("name", name);
+            formData.append("description", desc);
+            formData.append("price", price);
+            formData.append("category", category);
+
+            const res = await api("/files/upload", { method: "POST", body: formData });
+            if (res.success !== false) {
+                toastSuccess("文件上传成功，等待审核");
+                // 重置表单
+                $("uploadName").value = "";
+                $("uploadPrice").value = "0";
+                $("uploadDesc").value = "";
+                fileInput.value = "";
+                toggleUploadForm();
+                loadFiles();
+            }
+        } catch (err) {
+            // 错误已由 api() 处理
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = oldHtml;
+        }
+    }
+
+    /**
+     * 购买文件
+     * @param {number|string} fileId - 文件 ID
+     * @param {string} fileName - 文件名称
+     * @param {number} price - 价格
+     */
+    async function purchaseFile(fileId, fileName, price) {
+        if (parseFloat(price) > 0) {
+            if (!confirm(`确定要购买「${fileName}」吗？将扣除 ${parseFloat(price).toFixed(2)} 余额。`)) return;
+        }
+        try {
+            const res = await api(`/files/${fileId}/purchase`, { method: "POST" });
+            if (res.success !== false) {
+                toastSuccess("购买成功，现在可以下载该文件");
+                loadFiles();
+            }
+        } catch (err) {
+            // 错误已由 api() 处理
+        }
+    }
+
+    /**
+     * 下载文件 (在新标签页打开)
+     * @param {number|string} fileId - 文件 ID
+     */
+    function downloadFile(fileId) {
+        window.open("/api/v2/files/" + fileId + "/download", "_blank");
+    }
+
+    /**
+     * 渲染文件列表 (公开文件 - 插件/建筑)
+     * @param {array} files - 文件数组
+     * @param {string} containerId - 容器元素 ID
+     */
+    function renderFileList(files, containerId) {
+        const container = $(containerId);
+        if (!container) return;
+        if (!files || files.length === 0) {
+            container.innerHTML = renderEmptyState("fa-folder-open", "暂无文件", "该分类下暂无可用文件");
+            return;
+        }
+        container.innerHTML = files.map((f) => {
+            const id = f.id || f.file_id;
+            const name = f.name || f.filename || "未命名";
+            const desc = f.description || f.desc || "";
+            const price = parseFloat(f.price || 0).toFixed(2);
+            const size = formatFileSize(f.size);
+            const uploader = f.uploader || f.username || f.author || "";
+            const purchased = f.purchased || f.owned || false;
+            const isFree = parseFloat(f.price || 0) === 0;
+            // 免费文件或已购买 -> 可下载; 否则显示购买按钮
+            let actionHtml = "";
+            if (isFree || purchased) {
+                actionHtml = `<button class="btn btn-primary btn-sm" onclick="downloadFile('${escAttr(id)}')"><i class="fas fa-download"></i> 下载</button>`;
+            } else {
+                actionHtml = `<button class="btn btn-primary btn-sm" onclick="purchaseFile('${escAttr(id)}','${escAttr(name)}',${escapeHtml(price)})"><i class="fas fa-shopping-cart"></i> 购买</button>`;
+            }
+            return `
+                <div style="padding:12px;border:1px solid var(--border-muted);border-radius:10px;background:var(--bg-elevated);margin-bottom:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-weight:600;font-size:13px;color:var(--text-primary);word-break:break-word;">${escapeHtml(name)}</div>
+                            ${desc ? `<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;word-break:break-word;">${escapeHtml(desc)}</div>` : ""}
+                            <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">
+                                ${size ? `<span style="margin-right:8px;"><i class="fas fa-file"></i> ${escapeHtml(size)}</span>` : ""}
+                                ${uploader ? `<span><i class="fas fa-user"></i> ${escapeHtml(uploader)}</span>` : ""}
+                            </div>
+                        </div>
+                        <div style="text-align:right;white-space:nowrap;">
+                            <div style="color:#3fb950;font-weight:600;font-size:13px;margin-bottom:6px;">${isFree ? "免费" : '<i class="fas fa-coins"></i> ' + escapeHtml(price)}</div>
+                            ${actionHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    /**
+     * 渲染我的文件列表 (含审核状态)
+     * @param {array} files - 文件数组
+     * @param {string} containerId - 容器元素 ID
+     */
+    function renderMyFiles(files, containerId) {
+        const container = $(containerId);
+        if (!container) return;
+        if (!files || files.length === 0) {
+            container.innerHTML = renderEmptyState("fa-folder-open", "暂无文件", "您上传的文件将显示在这里");
+            return;
+        }
+        const statusMap = {
+            pending: { label: "待审核", color: "#d29922" },
+            approved: { label: "已通过", color: "#3fb950" },
+            rejected: { label: "已拒绝", color: "#f85149" },
+        };
+        container.innerHTML = files.map((f) => {
+            const name = f.name || f.filename || "未命名";
+            const desc = f.description || f.desc || "";
+            const price = parseFloat(f.price || 0).toFixed(2);
+            const category = f.category || "";
+            const status = f.status || "pending";
+            const st = statusMap[status] || statusMap.pending;
+            const catLabel = category === "plugin" ? "插件" : category === "building" ? "建筑" : category;
+            return `
+                <div style="padding:12px;border:1px solid var(--border-muted);border-radius:10px;background:var(--bg-elevated);margin-bottom:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                        <div style="flex:1;min-width:0;">
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <span style="font-weight:600;font-size:13px;color:var(--text-primary);word-break:break-word;">${escapeHtml(name)}</span>
+                                <span style="font-size:10px;padding:1px 8px;border-radius:9999px;background:${st.color}22;color:${st.color};border:1px solid ${st.color}44;">${escapeHtml(st.label)}</span>
+                                <span style="font-size:10px;padding:1px 8px;border-radius:9999px;background:var(--bg-secondary);color:var(--text-tertiary);">${escapeHtml(catLabel)}</span>
+                            </div>
+                            ${desc ? `<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;word-break:break-word;">${escapeHtml(desc)}</div>` : ""}
+                            ${f.reject_reason ? `<div style="font-size:12px;color:#f85149;margin-top:4px;">拒绝原因: ${escapeHtml(f.reject_reason)}</div>` : ""}
+                        </div>
+                        <span style="color:#3fb950;font-weight:600;font-size:13px;white-space:nowrap;">${parseFloat(price) === 0 ? "免费" : '<i class="fas fa-coins"></i> ' + escapeHtml(price)}</span>
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    /* -------------------- 管理后台 (Admin) -------------------- */
+
+    /**
+     * 加载订单列表 (管理员)
+     * @param {string} [searchQuery] - 搜索关键词 (可选)
+     */
+    async function loadAdminOrders(searchQuery) {
+        const container = $("adminOrdersList");
+        if (!container) return;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p style="font-size:13px;">加载中...</p></div>`;
+        try {
+            let res;
+            if (searchQuery && searchQuery.trim()) {
+                res = await api("/shop/orders/search?q=" + encodeURIComponent(searchQuery.trim()));
+            } else {
+                res = await api("/shop/admin/orders");
+            }
+            let orders = [];
+            if (res) {
+                orders = res.data || res.orders || res || [];
+            }
+            if (!Array.isArray(orders)) orders = [];
+            if (orders.length === 0) {
+                container.innerHTML = renderEmptyState("fa-receipt", "暂无订单", searchQuery ? "未找到匹配的订单" : "所有订单将显示在这里");
+                return;
+            }
+            container.innerHTML = orders.map((o) => {
+                const orderId = o.order_id || o.id || "-";
+                const productName = o.product_name || o.name || "-";
+                const username = o.username || o.user_name || o.user || "-";
+                const price = parseFloat(o.price || 0).toFixed(2);
+                const time = formatTime(o.created_at || o.created || o.date);
+                const cardKey = o.card_key || o.cardkey || "";
+                return `
+                    <div style="padding:12px 16px;border-bottom:1px solid var(--border-muted);">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+                            <div style="flex:1;min-width:200px;">
+                                <div style="font-weight:600;font-size:13px;color:var(--text-primary);">${escapeHtml(productName)}</div>
+                                <div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">
+                                    <span style="margin-right:8px;">订单号: ${escapeHtml(orderId)}</span>
+                                    <span><i class="fas fa-user"></i> ${escapeHtml(username)}</span>
+                                </div>
+                                <div style="font-size:11px;color:var(--text-tertiary);margin-top:2px;">${escapeHtml(time)}</div>
+                                ${cardKey ? `<div style="margin-top:4px;font-size:12px;color:var(--color-success);word-break:break-all;"><i class="fas fa-key"></i> ${escapeHtml(cardKey)}</div>` : ""}
+                            </div>
+                            <span style="color:#3fb950;font-weight:600;font-size:13px;white-space:nowrap;"><i class="fas fa-coins"></i> ${escapeHtml(price)}</span>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        } catch (err) {
+            container.innerHTML = renderEmptyState("fa-exclamation-circle", "加载失败", err.message || "请稍后重试");
+        }
+    }
+
+    /**
+     * 搜索订单
+     */
+    function searchOrders() {
+        const q = $("orderSearchInput").value;
+        loadAdminOrders(q);
+    }
+
+    /**
+     * 加载待审核文件列表 (管理员)
+     */
+    async function loadReviewFiles() {
+        const container = $("reviewFilesList");
+        if (!container) return;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p style="font-size:13px;">加载中...</p></div>`;
+        try {
+            const res = await api("/files/pending");
+            let files = [];
+            if (res) {
+                files = res.data || res.files || res || [];
+            }
+            if (!Array.isArray(files)) files = [];
+            if (files.length === 0) {
+                container.innerHTML = renderEmptyState("fa-check-circle", "暂无待审核文件", "所有文件已审核完毕");
+                return;
+            }
+            container.innerHTML = files.map((f) => {
+                const id = f.id || f.file_id;
+                const name = f.name || f.filename || "未命名";
+                const desc = f.description || f.desc || "";
+                const price = parseFloat(f.price || 0).toFixed(2);
+                const category = f.category || "";
+                const uploader = f.uploader || f.username || f.author || "-";
+                const catLabel = category === "plugin" ? "插件" : category === "building" ? "建筑" : category;
+                const size = formatFileSize(f.size);
+                return `
+                    <div style="padding:14px;border:1px solid var(--border-muted);border-radius:10px;background:var(--bg-elevated);margin-bottom:10px;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+                            <div style="flex:1;min-width:200px;">
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                    <span style="font-weight:600;font-size:14px;color:var(--text-primary);">${escapeHtml(name)}</span>
+                                    <span style="font-size:10px;padding:1px 8px;border-radius:9999px;background:var(--bg-secondary);color:var(--text-tertiary);">${escapeHtml(catLabel)}</span>
+                                </div>
+                                ${desc ? `<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;word-break:break-word;">${escapeHtml(desc)}</div>` : ""}
+                                <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">
+                                    <span style="margin-right:8px;"><i class="fas fa-user"></i> ${escapeHtml(uploader)}</span>
+                                    ${size ? `<span style="margin-right:8px;"><i class="fas fa-file"></i> ${escapeHtml(size)}</span>` : ""}
+                                    <span style="color:#3fb950;font-weight:600;"><i class="fas fa-coins"></i> ${parseFloat(price) === 0 ? "免费" : escapeHtml(price)}</span>
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:8px;">
+                                <button class="btn btn-primary btn-sm" onclick="approveFile('${escAttr(id)}')"><i class="fas fa-check"></i> 通过</button>
+                                <button class="btn btn-danger btn-sm" onclick="rejectFile('${escAttr(id)}')"><i class="fas fa-times"></i> 拒绝</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        } catch (err) {
+            container.innerHTML = renderEmptyState("fa-exclamation-circle", "加载失败", err.message || "请稍后重试");
+        }
+    }
+
+    /**
+     * 审核通过文件 (管理员)
+     * @param {number|string} fileId - 文件 ID
+     */
+    async function approveFile(fileId) {
+        try {
+            const res = await api(`/files/${fileId}/approve`, { method: "POST" });
+            if (res.success !== false) {
+                toastSuccess("文件已通过审核");
+                loadReviewFiles();
+            }
+        } catch (err) {
+            // 错误已由 api() 处理
+        }
+    }
+
+    /**
+     * 拒绝文件 (管理员)
+     * @param {number|string} fileId - 文件 ID
+     */
+    async function rejectFile(fileId) {
+        const reason = prompt("请输入拒绝原因:");
+        if (reason === null) return; // 用户取消
+        try {
+            const res = await api(`/files/${fileId}/reject`, {
+                method: "POST",
+                body: { reason: reason || "" },
+            });
+            if (res.success !== false) {
+                toastSuccess("文件已拒绝");
+                loadReviewFiles();
+            }
+        } catch (err) {
+            // 错误已由 api() 处理
+        }
+    }
+
+    /**
+     * 加载用户余额列表 (管理员)
+     */
+    async function loadUsersBalance() {
+        const container = $("usersBalanceList");
+        if (!container) return;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p style="font-size:13px;">加载中...</p></div>`;
+        try {
+            const res = await api("/auth/users");
+            let users = [];
+            if (res) {
+                users = res.data || res.users || res || [];
+            }
+            if (!Array.isArray(users)) users = [];
+            state.users = users;
+            if (users.length === 0) {
+                container.innerHTML = renderEmptyState("fa-users", "暂无用户", "用户列表为空");
+                return;
+            }
+            container.innerHTML = users.map((u) => {
+                const username = u.username || "-";
+                const balance = parseFloat(u.balance != null ? u.balance : (u.wallet_balance || 0)).toFixed(2);
+                const role = u.role || "user";
+                const roleLabel = ROLE_LABELS[role] || role;
+                return `
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border-muted);">
+                        <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
+                            <div style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#58a6ff,#a371f7);display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;font-weight:600;flex-shrink:0;">
+                                ${escapeHtml((username || "U").charAt(0).toUpperCase())}
+                            </div>
+                            <div style="min-width:0;">
+                                <div style="font-weight:500;font-size:13px;color:var(--text-primary);">${escapeHtml(username)}</div>
+                                <div style="font-size:11px;color:var(--text-tertiary);">${escapeHtml(roleLabel)}</div>
+                            </div>
+                        </div>
+                        <span style="color:#3fb950;font-weight:700;font-size:14px;white-space:nowrap;"><i class="fas fa-coins"></i> ${escapeHtml(balance)}</span>
+                    </div>
+                `;
+            }).join("");
+        } catch (err) {
+            container.innerHTML = renderEmptyState("fa-exclamation-circle", "加载失败", err.message || "请稍后重试");
+        }
+    }
+
+    /**
+     * 设置用户余额 (管理员)
+     */
+    async function setUserBalance() {
+        const username = $("balanceUsername").value.trim();
+        const amount = $("balanceAmount").value;
+        if (!username) { toastWarn("请输入用户名"); return; }
+        if (amount === "" || amount === null) { toastWarn("请输入余额"); return; }
+
+        // 通过用户名查找 user_id
+        const user = state.users.find((u) => u.username === username);
+        if (!user) {
+            toastError("未找到该用户: " + username);
+            return;
+        }
+        const userId = user.user_id || user.id;
+        const btn = $("setBalanceBtn");
+        const oldHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 设置中...';
+
+        try {
+            const res = await api(`/shop/balance/${userId}`, {
+                method: "POST",
+                body: { balance: parseFloat(amount) },
+            });
+            if (res.success !== false) {
+                toastSuccess(`已设置 ${username} 的余额为 ${parseFloat(amount).toFixed(2)}`);
+                $("balanceUsername").value = "";
+                $("balanceAmount").value = "";
+                loadUsersBalance();
+            }
+        } catch (err) {
+            // 错误已由 api() 处理
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = oldHtml;
+        }
+    }
+
+    /* ======================================================================
        20. 事件绑定
        ====================================================================== */
 
@@ -3173,6 +4025,9 @@
 
         // ---- 验证码刷新 ----
         $("captchaImgBox").addEventListener("click", loadCaptcha);
+        // ---- 邮箱验证码发送 ----
+        const sendEmailCodeBtn = $("sendEmailCodeBtn");
+        if (sendEmailCodeBtn) sendEmailCodeBtn.addEventListener("click", sendEmailCode);
 
         // ---- 登录 / 注册表单 ----
         $("loginForm").addEventListener("submit", handleLogin);
@@ -3255,6 +4110,13 @@
 
         // ---- Dashboard ----
         $("refreshActivity").addEventListener("click", loadActivity);
+        // 最近活动 折叠/展开
+        const toggleActivityBtn = $("toggleActivity");
+        if (toggleActivityBtn) {
+            toggleActivityBtn.addEventListener("click", toggleActivityCollapse);
+        }
+        // 恢复上次的折叠状态
+        restoreActivityCollapse();
         // 快捷操作按钮
         $$("[data-quick]").forEach((btn) => {
             btn.addEventListener("click", () => {
@@ -3515,6 +4377,27 @@
             });
             document.addEventListener("click", () => { quickCmdMenu.style.display = "none"; });
         }
+
+        // ---- 商店 / 文件管理 / 管理后台 事件绑定 ----
+        // 文件上传表单显示/隐藏
+        const showUploadBtn = $("showUploadBtn");
+        if (showUploadBtn) showUploadBtn.addEventListener("click", toggleUploadForm);
+        // 确认上传
+        const confirmUploadBtn = $("confirmUploadBtn");
+        if (confirmUploadBtn) confirmUploadBtn.addEventListener("click", handleShopFileUpload);
+        // 订单搜索
+        const searchOrderBtn = $("searchOrderBtn");
+        if (searchOrderBtn) searchOrderBtn.addEventListener("click", searchOrders);
+        const orderSearchInput = $("orderSearchInput");
+        if (orderSearchInput) orderSearchInput.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") searchOrders();
+        });
+        // 刷新审核列表
+        const refreshReviewBtn = $("refreshReviewBtn");
+        if (refreshReviewBtn) refreshReviewBtn.addEventListener("click", loadReviewFiles);
+        // 设置用户余额
+        const setBalanceBtn = $("setBalanceBtn");
+        if (setBalanceBtn) setBalanceBtn.addEventListener("click", setUserBalance);
 
         // ---- 欢迎时间定时刷新 ----
         setInterval(updateWelcomeTime, 1000);
@@ -3900,6 +4783,9 @@
     /* ======================================================================
        21. 启动
        ====================================================================== */
+
+    // 暴露部分函数供动态生成的内联按钮 (如加载失败重试) 调用
+    window.__pockettermReloadPanels = loadPanels;
 
     document.addEventListener("DOMContentLoaded", init);
 
