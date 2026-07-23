@@ -433,7 +433,7 @@ class SauthRefresher:
                 }
 
                 login_resp = await client.post(
-                    f"{_4399_LOGIN_URL}", data=login_data,
+                    f"{_4399_LOGIN_URL}?v=1", data=login_data,
                     follow_redirects=False,
                 )
                 login_text = login_resp.text
@@ -589,9 +589,8 @@ class SauthRefresher:
                     logger.warning("未获取到 SDK token")
                     return None, ""
 
-                # Step 7: 构建 4399pc sauth_json 并直接用 login-otp 验证
-                # uni_sauth 返回 502 (可能 4399pc 频道已被网易限制)
-                # 直接用 4399pc sauth_json 测试 login-otp, 如果成功则直接使用
+                # Step 7: 构建 4399pc sauth_json
+                # 参考 account_register.py 的正确实现: 完整字段 + uni_sauth + login-otp
                 import secrets as _secrets
 
                 _hex_chars = "0123456789ABCDEF"
@@ -624,16 +623,48 @@ class SauthRefresher:
                     {"sauth_json": _sauth_inner_str}, ensure_ascii=False
                 )
 
-                # 直接用 login-otp 验证 4399pc sauth_json
-                _LOGIN_OTP_URL = "https://x19obtcore.nie.netease.com:8443/login-otp"
-                _otp_headers = {
+                # Step 7a: uni_sauth (注册 4399pc 会话到网易统一认证)
+                # 关键修复: 必须先通过 uni_sauth 注册会话, login-otp 才能接受
+                # 参考 account_register.py step 9
+                _UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
+                _auth_headers = {
                     "User-Agent": "WPFLauncher/0.0.0.0",
                     "Content-Type": "application/json",
                 }
+                _uni_resp = await client.post(
+                    _UNI_SAUTH_URL,
+                    content=_sauth_inner_str.encode("utf-8"),
+                    headers=_auth_headers,
+                )
+                try:
+                    _uni_data = _uni_resp.json()
+                except Exception:
+                    _uni_data = {}
+                _uni_code = _uni_data.get("code", -1)
+                self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = _uni_code
+                self._last_refresh_debug["mpay_flow"]["uni_sauth_resp_500"] = (
+                    _uni_resp.text[:500]
+                )
+
+                if _uni_code != 0:
+                    logger.warning(
+                        f"uni_sauth 失败: code={_uni_code}, "
+                        f"msg={_uni_data.get('message', '')}, "
+                        f"resp={_uni_resp.text[:200]}"
+                    )
+                    self._last_refresh_debug["mpay_flow"]["status"] = (
+                        "uni_sauth_failed"
+                    )
+                    return None, ""
+
+                logger.info("uni_sauth 成功, 继续 login-otp 验证")
+
+                # Step 8: login-otp 最终验证
+                _LOGIN_OTP_URL = "https://x19obtcore.nie.netease.com:8443/login-otp"
                 _otp_resp = await client.post(
                     _LOGIN_OTP_URL,
                     content=_sauth_wrapped.encode("utf-8"),
-                    headers=_otp_headers,
+                    headers=_auth_headers,
                 )
                 try:
                     _otp_data = _otp_resp.json()
