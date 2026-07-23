@@ -293,6 +293,11 @@ class SauthRefresher:
         4399 的 login.do 在 sec=1 时要求密码使用 CryptoJS AES 加密
         (密钥: 'lzYW5qaXVqa', OpenSSL 格式)。
 
+        关键修复:
+        - sessionId 必须设置为验证码 ID (之前为空导致登录失败)
+        - captchaId 从 verify.do 响应中提取 (之前自己生成)
+        - gameUrl 保持空字符串 (与原始 login_4399.py 一致)
+
         Returns:
             (sauth_json, uid) 或 (None, "")
         """
@@ -300,6 +305,7 @@ class SauthRefresher:
         import os as _os
         import hashlib as _hashlib
         import base64 as _base64
+        import random as _random
         import httpx
         from Crypto.Cipher import AES as _AES
         from .netease_direct.login_4399 import (
@@ -317,14 +323,7 @@ class SauthRefresher:
         _AES_PASSPHRASE = "lzYW5qaXVqa"
 
         def _cryptojs_aes_encrypt(data: str, passphrase: str) -> str:
-            """CryptoJS 兼容的 AES-256-CBC 加密 (OpenSSL 格式)。
-
-            与 CryptoJS.AES.encrypt(data, passphrase).toString() 一致:
-            - 随机 8 字节 salt
-            - EVP_BytesToKey (MD5) 密钥派生
-            - PKCS7 填充
-            - 输出: base64("Salted__" + salt + ciphertext)
-            """
+            """CryptoJS 兼容的 AES-256-CBC 加密 (OpenSSL 格式)。"""
             salt = _os.urandom(8)
             d = b""
             d_i = b""
@@ -360,18 +359,30 @@ class SauthRefresher:
                 await client.get("https://ptlogin.4399.com/ptlogin/loginFrame.do?app=kid_wdsj&redirectUrl=&displayMode=popup&layout=vertical&level=8&css=http://microgame.5054399.net/v2/resource/cssSdk/default/login.css&regLevel=8&bizId=2100001792&appId=kid_wdsj&gameId=wd&externalLogin=qq&welcomeTip=%E6%AC%A2%E8%BF%8E%E5%9B%9E%E5%88%B04399&sessionId=1&sec=1&includeFcmInfo=false&inputWidth=iptw2&postLoginHandler=default&layoutSelfAdapting=true&loginFrom=uframe&mainDivId=popup_login_div")
                 self._last_refresh_debug["mpay_flow"]["step1"] = "login_page_visited"
 
-                # Step 2: 验证用户名
+                # Step 2: 验证用户名 + 提取 captchaId
                 import time as _time_mod
                 ts = int(_time_mod.time() * 1000)
-                verify_url = f"{VERIFY_URL}?username={username}&appId=kid_wdsj&t={ts}&inputWidth=iptw2&v=1"
+                verify_url = f"{VERIFY_URL}?username={username}&appId=kid_wdsj&t={ts}&inputWidth=iptw2"
                 resp = await client.get(verify_url)
                 verify_text = resp.text
                 need_captcha = "captchaId" in verify_text or '"code":0' not in verify_text
+
+                # BUG FIX: 从 verify.do 响应中提取 captchaId
+                # (之前自己生成, 与服务器 session 不匹配)
+                captcha_id = ""
+                if need_captcha:
+                    m = _re.search(r'captchaId=([A-Za-z0-9]+)', verify_text)
+                    if m:
+                        captcha_id = m.group(1)
+                    if not captcha_id:
+                        # 回退: 自己生成
+                        captcha_id = "captchaReq" + "".join(_random.choices("0123456789", k=8))
+
                 self._last_refresh_debug["mpay_flow"]["need_captcha"] = need_captcha
+                self._last_refresh_debug["mpay_flow"]["captcha_id"] = captcha_id
 
                 # Step 3: 获取验证码 + OCR (如果需要)
                 captcha_answer = ""
-                captcha_id = "captchaReq" + "".join(__import__("random").choices("0123456789", k=8))
 
                 if need_captcha:
                     for attempt in range(8):
@@ -381,14 +392,13 @@ class SauthRefresher:
                         captcha_answer = await _ocr_captcha(captcha_resp.content)
                         if captcha_answer and len(captcha_answer) >= 4:
                             break
-                        captcha_id = "captchaReq" + "".join(__import__("random").choices("0123456789", k=8))
+                        # 验证码识别失败, 重新获取
+                        captcha_id = "captchaReq" + "".join(_random.choices("0123456789", k=8))
                         captcha_answer = ""
 
-                self._last_refresh_debug["mpay_flow"]["captcha_answer"] = bool(captcha_answer)
+                self._last_refresh_debug["mpay_flow"]["captcha_answer"] = captcha_answer or False
 
                 # Step 4: POST login.do (AES 加密密码, sec=1)
-                # 4399 login.do 的 check_login JS 在 sec=1 时用
-                # CryptoJS.AES.encrypt(password, 'lzYW5qaXVqa') 加密密码
                 encrypted_pwd = _cryptojs_aes_encrypt(password, _AES_PASSPHRASE)
                 self._last_refresh_debug["mpay_flow"]["pwd_encrypted"] = True
 
@@ -404,7 +414,7 @@ class SauthRefresher:
                     "gameId": "wd",
                     "css": "http://microgame.5054399.net/v2/resource/cssSdk/default/login.css",
                     "redirectUrl": "",
-                    "sessionId": "",
+                    "sessionId": captcha_id,  # BUG FIX: 之前为空字符串!
                     "mainDivId": "popup_login_div",
                     "includeFcmInfo": "false",
                     "level": "8",
@@ -417,7 +427,7 @@ class SauthRefresher:
                     "inputCaptcha": captcha_answer,
                     "reg_eula_agree": "on",
                 }
-                # 用单独的 client (不自动重定向) POST login.do
+
                 login_resp = await client.post(
                     f"{_4399_LOGIN_URL}", data=login_data,
                     follow_redirects=False,
@@ -428,8 +438,7 @@ class SauthRefresher:
 
                 self._last_refresh_debug["mpay_flow"]["login_status"] = login_status
                 self._last_refresh_debug["mpay_flow"]["login_location"] = login_location[:300]
-                self._last_refresh_debug["mpay_flow"]["login_text_2000"] = login_text[:2000]
-                # 捕获 Set-Cookie 和客户端 cookies
+                self._last_refresh_debug["mpay_flow"]["login_text_500"] = login_text[:500]
                 self._last_refresh_debug["mpay_flow"]["login_set_cookies"] = [
                     v for k, v in login_resp.headers.multi_items()
                     if k.lower() == "set-cookie"
@@ -438,244 +447,102 @@ class SauthRefresher:
                     k: v[:50] for k, v in client.cookies.items()
                 }
 
-                # login.do 现在返回加载页面 (JavaScript 处理), 但 Set-Cookie
-                # 已在 HTTP 头中设置。不再检查 "登录成功" 字样, 直接继续到
-                # checkKidLoginUserCookie。
-                rand_time = str(int(_time_mod.time() * 1000))
+                # 检查登录是否成功:
+                # - "登录成功" in body, 或
+                # - Set-Cookie 包含 Pauth (认证 cookie), 或
+                # - 302 重定向
+                has_pauth = any(
+                    "Pauth" in v
+                    for k, v in login_resp.headers.multi_items()
+                    if k.lower() == "set-cookie"
+                )
+                login_ok = (
+                    "登录成功" in login_text
+                    or has_pauth
+                    or login_status in (301, 302, 303, 307, 308)
+                )
 
-                # 尝试提取 rand_time (如果存在于响应中)
+                if not login_ok:
+                    self._last_refresh_debug["mpay_flow"]["status"] = "login_failed"
+                    return None, ""
+
+                self._last_refresh_debug["mpay_flow"]["status"] = "login_ok"
+
+                # 提取 rand_time
+                rand_time = str(int(_time_mod.time() * 1000))
                 rt_match = _re.search(r'"rand_time"\s*:\s*(\d+)', login_text)
                 if rt_match:
                     rand_time = rt_match.group(1)
 
-                # 如果是重定向, 跟随一次
-                if login_status in (301, 302, 303, 307, 308) and login_location:
-                    resp_redirect = await client.get(login_location)
-                    rt_match2 = _re.search(
-                        r'"rand_time"\s*:\s*(\d+)', resp_redirect.text
-                    )
-                    if rt_match2:
-                        rand_time = rt_match2.group(1)
-
-                # 尝试提取 HTML 中的跳转 URL
-                url_match = _re.search(
-                    r'(?:location\.href|window\.location|url)\s*=\s*'
-                    r'["\']([^"\']+)["\']',
-                    login_text,
-                )
-                if url_match:
-                    self._last_refresh_debug["mpay_flow"]["html_redirect"] = (
-                        url_match.group(1)[:300]
-                    )
-
-                # 等待 1 秒, 让服务器完成登录处理
-                import asyncio as _asyncio_mod
-                await _asyncio_mod.sleep(1)
-
-                self._last_refresh_debug["mpay_flow"]["status"] = (
-                    "proceeding_to_check_cookie"
-                )
-
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
-                # gameUrl 必须设置, 尝试多个值找到正确的
-                from urllib.parse import quote as _url_quote
+                # gameUrl 保持空字符串 (与原始 login_4399.py 一致)
+                check_url = (
+                    f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
+                    f"&gameUrl=&rand_time={rand_time}"
+                )
+                resp2 = await client.get(check_url, follow_redirects=False)
 
-                game_url_candidates = [
-                    SDK_INFO_URL,                         # SDK info URL
-                    "http://microgame.5054399.net/",       # 游戏域名根
-                    "http://www.4399.com/",                # 4399 主站
-                    "https://ptlogin.4399.com/",           # 登录页
-                    "http://microgame.5054399.net/v2/",    # 游戏v2路径
-                ]
-
-                sig = ""
-                ck_uid = ""
-                login_time = ""
-                validate_state = ""
-
-                for game_url in game_url_candidates:
-                    check_url = (
-                        f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
-                        f"&gameUrl={_url_quote(game_url, safe='')}"
-                        f"&rand_time={rand_time}"
-                    )
-                    resp2 = await client.get(check_url, follow_redirects=False)
-
-                    if resp2.status_code in (301, 302, 303, 307, 308):
-                        redirect_url = resp2.headers.get("location", "")
-                    else:
-                        redirect_url = resp2.text
-
-                    # 检查是否有 sig
-                    sig_match = _re.search(r"sig=([^&]+)", redirect_url)
-                    if sig_match:
-                        sig = sig_match.group(1)
-                        uid_match = _re.search(r"uid=([^&]+)", redirect_url)
-                        time_match = _re.search(r"time=([^&]+)", redirect_url)
-                        state_match = _re.search(r"validateState=([^&]+)", redirect_url)
-                        ck_uid = uid_match.group(1) if uid_match else ""
-                        login_time = time_match.group(1) if time_match else ""
-                        validate_state = state_match.group(1) if state_match else ""
-                        self._last_refresh_debug["mpay_flow"]["working_gameUrl"] = game_url
-                        break
-
-                    # 记录每个 gameUrl 的响应状态
-                    error_match = _re.search(r'<strong>([^<]+)</strong>', redirect_url)
-                    error_msg = error_match.group(1).strip() if error_match else ""
-                    self._last_refresh_debug["mpay_flow"][f"gameUrl_{game_url[:30]}"] = (
-                        f"status={resp2.status_code}, error={error_msg[:50]}"
-                    )
-
-                # 使用最后一个响应作为调试信息
-                self._last_refresh_debug["mpay_flow"]["check_status"] = resp2.status_code
+                self._last_refresh_debug["mpay_flow"]["check_status"] = (
+                    resp2.status_code
+                )
                 self._last_refresh_debug["mpay_flow"]["check_location"] = (
                     resp2.headers.get("location", "")[:500]
                 )
-                self._last_refresh_debug["mpay_flow"]["check_redirect_3000"] = (
-                    redirect_url[:3000]
+
+                if resp2.status_code in (301, 302, 303, 307, 308):
+                    redirect_url = resp2.headers.get("location", "")
+                else:
+                    redirect_url = resp2.text
+
+                self._last_refresh_debug["mpay_flow"]["check_redirect_500"] = (
+                    redirect_url[:500]
                 )
 
-                # 初始化 MPay token 变量
-                mpay_token: str = ""
-                mpay_sdkuid: str = ""
+                sig_match = _re.search(r"sig=([^&]+)", redirect_url)
+                uid_match = _re.search(r"uid=([^&]+)", redirect_url)
+                time_match = _re.search(r"time=([^&]+)", redirect_url)
+                state_match = _re.search(r"validateState=([^&]+)", redirect_url)
+
+                sig = sig_match.group(1) if sig_match else ""
+                ck_uid = uid_match.group(1) if uid_match else ""
+                login_time = time_match.group(1) if time_match else ""
+                validate_state = state_match.group(1) if state_match else ""
 
                 if not sig:
-                    self._last_refresh_debug["mpay_flow"]["check_cookie"] = (
-                        "no_sig_trying_alternatives"
-                    )
-
-                    # 从 cookies 提取各种 hash 值尝试作为 sig
-                    pauth = client.cookies.get("Pauth", "")
-                    pauth_parts = pauth.split("|") if pauth else []
-                    ck_uid = pauth_parts[0] if len(pauth_parts) > 0 else ""
-                    pauth_token = pauth_parts[2] if len(pauth_parts) > 2 else ""
-                    pauth_time = pauth_parts[3] if len(pauth_parts) > 3 else ""
-                    pauth_hash = pauth_parts[5] if len(pauth_parts) > 5 else ""
-
-                    uauth = client.cookies.get("Uauth", "")
-                    uauth_parts = uauth.split("|") if uauth else []
-                    uauth_hash = uauth_parts[5] if len(uauth_parts) > 5 else ""
-
-                    xauth = client.cookies.get("Xauth", "")
-
-                    self._last_refresh_debug["mpay_flow"]["pauth_uid"] = ck_uid
-                    self._last_refresh_debug["mpay_flow"]["pauth_hash"] = pauth_hash[:20]
-                    self._last_refresh_debug["mpay_flow"]["uauth_hash"] = uauth_hash[:20]
-                    self._last_refresh_debug["mpay_flow"]["xauth"] = xauth[:20]
-
-                    # 尝试多种 sig 值调用 sdk/info
-                    sig_candidates = [
-                        ("uauth_hash", uauth_hash, pauth_time or rand_time, pauth_hash or xauth),
-                        ("pauth_hash", pauth_hash, pauth_time or rand_time, uauth_hash or xauth),
-                        ("xauth", xauth, pauth_time or rand_time, pauth_hash or uauth_hash),
-                        ("pauth_token", pauth_token, pauth_time or rand_time, pauth_hash or uauth_hash),
-                    ]
-
-                    for sig_name, sig_val, time_val, state_val in sig_candidates:
-                        if not sig_val:
-                            continue
-                        try:
-                            alt_query = _SDK_QUERY.format(
-                                game_id="500352",
-                                sig=sig_val,
-                                uid=ck_uid,
-                                time=time_val,
-                                validateState=state_val,
-                                username=username,
-                            )
-                            alt_sdk_url = (
-                                f"{SDK_INFO_URL}?callback=&queryStr={alt_query}"
-                            )
-                            resp_alt = await client.get(alt_sdk_url)
-                            alt_text = resp_alt.text.strip()
-                            if alt_text.startswith("(") and alt_text.endswith(")"):
-                                alt_text = alt_text[1:-1]
-                            elif "(" in alt_text and alt_text.endswith(")"):
-                                inner_start = alt_text.find("(")
-                                if inner_start != -1:
-                                    alt_text = alt_text[inner_start + 1:-1]
-                            alt_data = json.loads(alt_text) if alt_text else {}
-                            alt_login_data = alt_data.get("sdk_login_data", {})
-                            alt_token = alt_login_data.get("token", "")
-                            self._last_refresh_debug["mpay_flow"][f"alt_{sig_name}_resp"] = (
-                                str(alt_data)[:200]
-                            )
-                            if alt_token:
-                                mpay_token = alt_token
-                                mpay_sdkuid = alt_login_data.get("sdkuid", ck_uid)
-                                self._last_refresh_debug["mpay_flow"]["alt"] = (
-                                    f"sdk_info_{sig_name}"
-                                )
-                                break
-                        except Exception as alt_e:
-                            self._last_refresh_debug["mpay_flow"][f"alt_{sig_name}_err"] = (
-                                str(alt_e)[:100]
-                            )
-
-                    # 方案 2: 用 Pauth token 直接尝试 fever_to_sauth
-                    if not mpay_token and pauth_token:
-                        self._last_refresh_debug["mpay_flow"]["alt"] = (
-                            "pauth_token_direct"
-                        )
-                        try:
-                            convert_result = await _fever_to_sauth(
-                                sdkuid=ck_uid,
-                                sessionid=pauth_token,
-                                deviceid=deviceid,
-                            )
-                            if convert_result.get("success"):
-                                sauth_json_str = convert_result["sauth_json"]
-                                self._last_refresh_debug["mpay_flow"][
-                                    "fever_result"
-                                ] = "success_via_pauth"
-                                logger.info(
-                                    "通过 Pauth token 直接转换 sauth 成功"
-                                )
-                                return sauth_json_str, ck_uid
-                            else:
-                                self._last_refresh_debug["mpay_flow"][
-                                    "fever_result"
-                                ] = convert_result.get("message", "")[:200]
-                        except Exception as ft_e:
-                            self._last_refresh_debug["mpay_flow"][
-                                "fever_err"
-                            ] = str(ft_e)
-
-                    if not mpay_token:
-                        return None, ""
+                    self._last_refresh_debug["mpay_flow"]["check_cookie"] = "no_sig"
+                    return None, ""
 
                 self._last_refresh_debug["mpay_flow"]["check_cookie"] = "ok"
                 self._last_refresh_debug["mpay_flow"]["uid"] = ck_uid
 
-                # Step 6: sdk/info → MPay SDK token (仅当未从替代方案获取时)
-                if not mpay_token:
-                    query_str = _SDK_QUERY.format(
-                        game_id="500352",
-                        sig=sig,
-                        uid=ck_uid,
-                        time=login_time,
-                        validateState=validate_state,
-                        username=username,
-                    )
-                    sdk_url = f"{SDK_INFO_URL}?callback=&queryStr={query_str}"
-                    resp3 = await client.get(sdk_url)
-                    sdk_text = resp3.text.strip()
+                # Step 6: sdk/info → MPay SDK token
+                query_str = _SDK_QUERY.format(
+                    game_id="500352",
+                    sig=sig,
+                    uid=ck_uid,
+                    time=login_time,
+                    validateState=validate_state,
+                    username=username,
+                )
+                sdk_url = f"{SDK_INFO_URL}?callback=&queryStr={query_str}"
+                resp3 = await client.get(sdk_url)
+                sdk_text = resp3.text.strip()
 
-                    # 去除 JSONP 包裹
-                    if sdk_text.startswith("(") and sdk_text.endswith(")"):
-                        sdk_text = sdk_text[1:-1]
-                    elif "(" in sdk_text and sdk_text.endswith(")"):
-                        inner_start = sdk_text.find("(")
-                        if inner_start != -1:
-                            sdk_text = sdk_text[inner_start + 1 : -1]
+                # 去除 JSONP 包裹
+                if sdk_text.startswith("(") and sdk_text.endswith(")"):
+                    sdk_text = sdk_text[1:-1]
+                elif "(" in sdk_text and sdk_text.endswith(")"):
+                    inner_start = sdk_text.find("(")
+                    if inner_start != -1:
+                        sdk_text = sdk_text[inner_start + 1 : -1]
 
-                    sdk_data = json.loads(sdk_text) if sdk_text else {}
-                    sdk_login_data = sdk_data.get("sdk_login_data", {})
-                    mpay_token = sdk_login_data.get("token", "")
-                    mpay_sdkuid = sdk_login_data.get("sdkuid", ck_uid)
+                sdk_data = json.loads(sdk_text) if sdk_text else {}
+                sdk_login_data = sdk_data.get("sdk_login_data", {})
+                mpay_token = sdk_login_data.get("token", "")
+                mpay_sdkuid = sdk_login_data.get("sdkuid", ck_uid)
 
-                    self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
-                    self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
+                self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
+                self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
 
         except Exception as e:
             self._last_refresh_debug["mpay_flow"]["status"] = "exception"
