@@ -305,7 +305,7 @@ class Database:
             await self._migrate_announcements_table()
             await self._migrate_sauth_accounts_table()
             await self._migrate_users_v2_table()
-        await self._migrate_bot_last_error_table()
+            await self._migrate_bot_last_error_table()
 
             # -- 初始化默认商店商品 (仅在表为空时插入) -------------------
             await self._init_default_shop_products()
