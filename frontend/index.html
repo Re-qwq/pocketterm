@@ -1670,9 +1670,6 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         </div>
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
-            <div class="topbar-balance" id="topbarBalance" title="账户余额" style="display:none;">
-                <i class="fas fa-coins"></i> <span id="topbarBalanceText">余额: --</span>
-            </div>
             <button class="theme-toggle" id="themeToggle" aria-label="切换主题" title="切换主题">
                 <i class="fas fa-moon"></i>
             </button>
@@ -2252,10 +2249,6 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 </div>
                 <div id="createBotManualFields" style="display:none;">
                     <div class="form-group">
-                        <label class="form-label"><i class="fas fa-hashtag"></i> 服务器编号</label>
-                        <input type="text" class="form-input" id="createBotServerCode" placeholder="租赁服编号 (如 123456)">
-                    </div>
-                    <div class="form-group">
                         <label class="form-label" style="display:flex;align-items:center;gap:6px;">
                             <input type="radio" name="manualAuthType" id="manualAuth4399" value="4399" checked>
                             <i class="fas fa-user"></i> 4399账号密码
@@ -2288,10 +2281,6 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                     </div>
                 </div>
                 <div id="createBotPoolInfo" style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:16px;">
-                    <div class="form-group" style="margin-bottom:8px;">
-                        <label class="form-label"><i class="fas fa-hashtag"></i> 服务器编号</label>
-                        <input type="text" class="form-input" id="createBotPoolServerCode" placeholder="租赁服编号 (如 1895088)">
-                    </div>
                     <div style="font-size:13px;color:var(--text-secondary);">
                         <i class="fas fa-info-circle"></i> 系统将自动从Cookie池中选择一个未封禁的账号
                     </div>
@@ -2705,10 +2694,25 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
             <div class="page-header">
                 <div>
                     <div class="page-title"><i class="fas fa-store"></i> 商店</div>
-                    <div class="page-subtitle">使用余额购买卡密和文件</div>
+                    <div class="page-subtitle">使用余额购买卡密和文件，也可上传文件售卖</div>
                 </div>
                 <div class="page-actions">
                     <span class="topbar-balance" id="shopBalance"><i class="fas fa-coins"></i> <span id="shopBalanceText">0.00</span></span>
+                    <button class="btn btn-primary btn-sm" id="showUploadBtn"><i class="fas fa-upload"></i> 上传文件售卖</button>
+                </div>
+            </div>
+            <!-- Upload form (hidden by default) - 上传文件到商店售卖 -->
+            <div class="card" id="uploadFormCard" style="display:none;margin-bottom:16px;">
+                <div class="card-header"><div class="card-title"><i class="fas fa-upload"></i> 上传新文件</div></div>
+                <div class="card-body">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                        <div><div class="form-group"><label class="form-label">文件名称 (最多18字)</label><input type="text" class="form-input" id="uploadName" maxlength="18" placeholder="文件名称"></div></div>
+                        <div><div class="form-group"><label class="form-label">分类</label><select class="form-input" id="uploadCategory"><option value="plugin">插件</option><option value="building">建筑</option></select></div></div>
+                        <div><div class="form-group"><label class="form-label">价格 (余额)</label><input type="number" class="form-input" id="uploadPrice" min="0" step="0.01" value="0" placeholder="0为免费"></div></div>
+                        <div><div class="form-group"><label class="form-label">选择文件 (最大512KB)</label><input type="file" class="form-input" id="uploadFile"></div></div>
+                    </div>
+                    <div class="form-group" style="margin-top:8px;"><label class="form-label">介绍 (最多60字)</label><textarea class="form-input" id="uploadDesc" maxlength="60" rows="2" placeholder="文件介绍"></textarea></div>
+                    <button class="btn btn-primary btn-sm" id="confirmUploadBtn" style="margin-top:8px;"><i class="fas fa-check"></i> 确认上传</button>
                 </div>
             </div>
             <div class="dashboard-grid">
@@ -2732,44 +2736,19 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         </section>
 
         <!-- ==================================================================
-             View: Files (文件管理)
+             View: Files (我的文件)
              ================================================================== -->
         <section class="view" id="view-files">
             <div class="page-header">
                 <div>
-                    <div class="page-title"><i class="fas fa-folder"></i> 文件管理</div>
-                    <div class="page-subtitle">上传和管理文件</div>
-                </div>
-                <div class="page-actions">
-                    <button class="btn btn-primary btn-sm" id="showUploadBtn"><i class="fas fa-upload"></i> 上传文件</button>
-                </div>
-            </div>
-            <!-- Upload form (hidden by default) -->
-            <div class="card" id="uploadFormCard" style="display:none;margin-bottom:16px;">
-                <div class="card-header"><div class="card-title"><i class="fas fa-upload"></i> 上传新文件</div></div>
-                <div class="card-body">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                        <div><div class="form-group"><label class="form-label">文件名称 (最多18字)</label><input type="text" class="form-input" id="uploadName" maxlength="18" placeholder="文件名称"></div></div>
-                        <div><div class="form-group"><label class="form-label">分类</label><select class="form-input" id="uploadCategory"><option value="plugin">插件</option><option value="building">建筑</option></select></div></div>
-                        <div><div class="form-group"><label class="form-label">价格 (余额)</label><input type="number" class="form-input" id="uploadPrice" min="0" step="0.01" value="0" placeholder="0为免费"></div></div>
-                        <div><div class="form-group"><label class="form-label">选择文件 (最大512KB)</label><input type="file" class="form-input" id="uploadFile"></div></div>
-                    </div>
-                    <div class="form-group" style="margin-top:8px;"><label class="form-label">介绍 (最多60字)</label><textarea class="form-input" id="uploadDesc" maxlength="60" rows="2" placeholder="文件介绍"></textarea></div>
-                    <button class="btn btn-primary btn-sm" id="confirmUploadBtn" style="margin-top:8px;"><i class="fas fa-check"></i> 确认上传</button>
+                    <div class="page-title"><i class="fas fa-folder"></i> 我的文件</div>
+                    <div class="page-subtitle">管理您上传的文件 (审核状态、价格等)</div>
                 </div>
             </div>
             <div class="dashboard-grid">
                 <div class="card">
-                    <div class="card-header"><div class="card-title"><i class="fas fa-plug"></i> 插件文件</div></div>
-                    <div class="card-body"><div id="pluginFilesList"></div></div>
-                </div>
-                <div class="card">
-                    <div class="card-header"><div class="card-title"><i class="fas fa-cube"></i> 建筑文件</div></div>
-                    <div class="card-body"><div id="buildingFilesList"></div></div>
-                </div>
-                <div class="card">
                     <div class="card-header"><div class="card-title"><i class="fas fa-user"></i> 我的文件</div></div>
-                    <div class="card-body"><div id="myFilesList" style="max-height:400px;overflow-y:auto;"></div></div>
+                    <div class="card-body"><div id="myFilesList" style="max-height:600px;overflow-y:auto;"></div></div>
                 </div>
             </div>
         </section>

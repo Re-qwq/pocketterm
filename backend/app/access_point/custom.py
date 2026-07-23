@@ -583,7 +583,7 @@ class CustomAccessPoint(AccessPoint):
         except Exception as e:
             err_msg = str(e)
             if "code=29" in err_msg or "封禁" in err_msg:
-                self._log("账号已被网易封禁 (code=29)！请更换账号后重试", "error")
+                self._log("账号已被网易封禁 (code=29)", "error")
                 # C-2: 封禁时清除缓存
                 if account_id:
                     try:
@@ -591,7 +591,9 @@ class CustomAccessPoint(AccessPoint):
                     except Exception:
                         pass
             elif "code=32" in err_msg:
-                self._log("网易服务器返回错误 (code=32)：可能是设备信息不匹配或服务器维护中", "error")
+                self._log("认证已过期或无效 (code=32), 请检查4399账号池或刷新sauth_json", "error")
+            elif "code=10" in err_msg:
+                self._log("未登录或登录已过期 (code=10), 请检查sauth_json", "error")
             elif "code=" in err_msg:
                 self._log(f"网易认证失败: {err_msg}", "error")
             else:

@@ -886,8 +886,6 @@
         updateUserUI();
         // 更新管理员区域可见性
         updateAdminVisibility();
-        // 加载账户余额 (顶部栏显示)
-        loadBalance();
         // 建立 WebSocket 实时连接 (指数退避重连)
         initWebSocket();
         // 默认切换到仪表盘
@@ -1046,11 +1044,59 @@
        文件管理 / 插件管理
        ====================================================================== */
 
+    /**
+     * 发起旧版 API 请求 (不带 /api/v2 前缀, 直接使用 /api/... 完整路径)
+     * 用于面板详情中的文件/插件管理接口 (后端旧版 API 位于 /api/ 而非 /api/v2/)
+     * @param {string} path - 完整路径 (如 "/api/files/123")
+     * @param {object} options - fetch 选项 {method, body, headers, ...}
+     * @returns {Promise<object>} 解析后的 JSON
+     */
+    async function legacyApi(path, options = {}) {
+        const headers = options.headers ? Object.assign({}, options.headers) : {};
+        // 认证头: 优先使用内存中的 token, 回退到 localStorage
+        const token = state.token || localStorage.getItem(TOKEN_KEY);
+        if (token) headers["Authorization"] = "Bearer " + token;
+        // FormData 不设置 Content-Type, 让浏览器自动设置 boundary
+        if (!(options.body instanceof FormData) && options.body !== undefined && options.body !== null) {
+            if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+        }
+        const fetchOpts = {
+            method: options.method || "GET",
+            credentials: "include",
+            headers,
+        };
+        if (options.body !== undefined && options.body !== null) {
+            fetchOpts.body = options.body;
+        }
+        let response;
+        try {
+            response = await fetch(path, fetchOpts);
+        } catch (err) {
+            throw { message: "网络连接失败", type: "network" };
+        }
+        if (!response.ok) {
+            let msg = `请求失败 (${response.status})`;
+            try {
+                const data = await response.json();
+                const extracted = extractApiMessage(data);
+                if (extracted) msg = extracted;
+            } catch (_) { /* 响应非 JSON */ }
+            throw { message: msg, status: response.status };
+        }
+        // 尝试解析 JSON, 失败则返回成功标记
+        try {
+            return await response.json();
+        } catch (_) {
+            return { success: true };
+        }
+    }
+
     async function loadPanelFiles() {
         if (!state.currentPanelId) return;
         const pluginId = state.currentPanelId;
         try {
-            const res = await api(`/files/${pluginId}`, { method: "GET" });
+            // 旧版文件 API 位于 /api/files/{plugin_id} (非 /api/v2), 直接使用完整路径
+            const res = await legacyApi("/api/files/" + pluginId, { method: "GET" });
             const files = res.data || res.files || [];
             const container = $("fileGrid");
             if (!container) return;
@@ -1096,7 +1142,8 @@
             formData.append("file", file);
             try {
                 appendTerminal(`正在上传文件: ${file.name}...`, "system");
-                const res = await api(`/files/${pluginId}/upload`, { method: "POST", body: formData });
+                // 旧版文件上传 API: /api/files/{plugin_id}/upload
+                const res = await legacyApi("/api/files/" + pluginId + "/upload", { method: "POST", body: formData });
                 if (res.success !== false) {
                     appendTerminal(`文件上传成功: ${file.name}`, "success");
                     toastSuccess(`文件 ${file.name} 上传成功`);
@@ -1116,7 +1163,8 @@
     async function deletePanelFile(pluginId, filename) {
         if (!confirm(`确定要删除文件 ${filename} 吗？`)) return;
         try {
-            const res = await api(`/files/${pluginId}/${encodeURIComponent(filename)}`, { method: "DELETE" });
+            // 旧版文件删除 API: /api/files/{plugin_id}/{filename}
+            const res = await legacyApi("/api/files/" + pluginId + "/" + encodeURIComponent(filename), { method: "DELETE" });
             if (res.success !== false) {
                 toastSuccess("文件已删除");
                 loadPanelFiles();
@@ -1128,7 +1176,8 @@
 
     async function loadPanelPlugins() {
         try {
-            const res = await api("/plugins", { method: "GET" });
+            // 旧版插件 API 位于 /api/plugins (非 /api/v2), 直接使用完整路径
+            const res = await legacyApi("/api/plugins", { method: "GET" });
             const plugins = res.data || res.plugins || [];
             const container = $("pluginList");
             if (!container) return;
@@ -1168,7 +1217,8 @@
             formData.append("file", file);
             try {
                 appendTerminal(`正在安装插件: ${file.name}...`, "system");
-                const res = await api(`/files/${pluginId}/upload`, { method: "POST", body: formData });
+                // 旧版插件上传 API: /api/files/{plugin_id}/upload
+                const res = await legacyApi("/api/files/" + pluginId + "/upload", { method: "POST", body: formData });
                 if (res.success !== false) {
                     appendTerminal(`插件安装成功: ${file.name}`, "success");
                     toastSuccess(`插件 ${file.name} 安装成功`);
@@ -1186,7 +1236,8 @@
 
     async function togglePlugin(pluginId, action) {
         try {
-            const res = await api(`/plugins/${pluginId}/${action}`, { method: "POST" });
+            // 旧版插件启停 API: /api/plugins/{plugin_id}/{action}
+            const res = await legacyApi("/api/plugins/" + pluginId + "/" + action, { method: "POST" });
             if (res.success !== false) {
                 toastSuccess(action === 'enable' ? '插件已启用' : '插件已禁用');
                 loadPanelPlugins();
@@ -1198,7 +1249,8 @@
 
     async function reloadPlugin(pluginId) {
         try {
-            const res = await api(`/plugins/${pluginId}/reload`, { method: "POST" });
+            // 旧版插件重载 API: /api/plugins/{plugin_id}/reload
+            const res = await legacyApi("/api/plugins/" + pluginId + "/reload", { method: "POST" });
             if (res.success !== false) {
                 toastSuccess("插件已重载");
             }
@@ -1439,14 +1491,14 @@
     }
 
     /**
-     * 加载当前用户余额并更新顶部栏显示
-     * 调用 GET /api/v2/shop/balance, 格式化为 "余额: XX.XX"
-     * 接口不可用时静默隐藏余额元素, 不影响主流程
+     * 加载当前用户余额并更新商店视图余额显示
+     * 调用 GET /api/v2/shop/balance, 格式化为 "XX.XX"
+     * 仅在商店视图加载时调用 (不再在顶栏显示余额)
+     * 接口不可用时静默处理, 不影响主流程
      */
     async function loadBalance() {
-        const balanceEl = $("topbarBalance");
-        const textEl = $("topbarBalanceText");
-        if (!balanceEl || !textEl) return;
+        const textEl = $("shopBalanceText");
+        if (!textEl) return;
         try {
             const res = await api("/shop/balance");
             if (res && res.success) {
@@ -1457,15 +1509,13 @@
                 }
                 const num = parseFloat(balance);
                 const formatted = isNaN(num) ? "0.00" : num.toFixed(2);
-                textEl.textContent = "余额: " + formatted;
-                balanceEl.style.display = "";
+                textEl.textContent = formatted;
             } else {
-                // 接口存在但未返回成功 -> 隐藏余额显示
-                balanceEl.style.display = "none";
+                textEl.textContent = "0.00";
             }
         } catch (_) {
-            // 余额接口不可用 (如未部署商店模块) -> 静默隐藏, 不打扰用户
-            balanceEl.style.display = "none";
+            // 余额接口不可用 (如未部署商店模块) -> 静默处理, 不打扰用户
+            textEl.textContent = "0.00";
         }
     }
 
@@ -3270,19 +3320,14 @@
      * 加载商店数据: 商品列表、余额、订单
      */
     async function loadShop() {
-        // 并行加载商品、余额、订单
-        const [productsRes, balanceRes, ordersRes] = await Promise.allSettled([
+        // 并行加载商品、订单; 余额由 loadBalance() 单独加载 (仅商店视图调用)
+        const [productsRes, ordersRes] = await Promise.allSettled([
             api("/shop/products"),
-            api("/shop/balance"),
             api("/shop/orders"),
         ]);
 
-        // 渲染余额
-        if (balanceRes.status === "fulfilled" && balanceRes.value) {
-            const bal = balanceRes.value;
-            const balance = bal.balance != null ? bal.balance : (bal.data && bal.data.balance != null ? bal.data.balance : 0);
-            if ($("shopBalanceText")) $("shopBalanceText").textContent = parseFloat(balance).toFixed(2);
-        }
+        // 渲染余额 (商店视图)
+        loadBalance();
 
         // 渲染商品 (按分类分组) - API 返回 {panel_card: [...], register_card: [...], ...}
         let productsGrouped = {};
@@ -3418,37 +3463,29 @@
     /* -------------------- 文件管理 (Files) -------------------- */
 
     /**
-     * 加载文件列表: 插件、建筑、我的文件
+     * 加载文件列表: 只加载自己上传的文件 (/files/my)
+     * 公开文件 (插件/建筑) 已移至商店视图购买, 不再在文件管理显示
      */
     async function loadFiles() {
-        const [pluginRes, buildingRes, myRes] = await Promise.allSettled([
-            api("/files/list?category=plugin"),
-            api("/files/list?category=building"),
-            api("/files/my"),
-        ]);
-
-        let plugins = [], buildings = [], myUploaded = [], myPurchased = [];
-        if (pluginRes.status === "fulfilled" && pluginRes.value) {
-            const d = pluginRes.value.data || pluginRes.value;
-            plugins = Array.isArray(d) ? d : [];
-        }
-        if (buildingRes.status === "fulfilled" && buildingRes.value) {
-            const d = buildingRes.value.data || buildingRes.value;
-            buildings = Array.isArray(d) ? d : [];
-        }
-        if (myRes.status === "fulfilled" && myRes.value) {
-            const d = myRes.value.data || myRes.value;
-            if (d && typeof d === "object" && !Array.isArray(d)) {
-                myUploaded = Array.isArray(d.uploaded) ? d.uploaded : [];
-                myPurchased = Array.isArray(d.purchased) ? d.purchased : [];
-            } else if (Array.isArray(d)) {
-                myUploaded = d;
+        const container = $("myFilesList");
+        if (!container) return;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p style="font-size:13px;">加载中...</p></div>`;
+        try {
+            const myRes = await api("/files/my");
+            let myUploaded = [];
+            if (myRes) {
+                const d = myRes.data || myRes;
+                if (d && typeof d === "object" && !Array.isArray(d)) {
+                    // {uploaded: [...], purchased: [...]} -> 只显示自己上传的
+                    myUploaded = Array.isArray(d.uploaded) ? d.uploaded : [];
+                } else if (Array.isArray(d)) {
+                    myUploaded = d;
+                }
             }
+            renderMyFiles(myUploaded, "myFilesList");
+        } catch (err) {
+            container.innerHTML = renderEmptyState("fa-exclamation-circle", "加载失败", err.message || "请稍后重试");
         }
-        renderFileList(plugins, "pluginFilesList");
-        renderFileList(buildings, "buildingFilesList");
-        // 我的文件: 合并上传 + 购买
-        renderMyFiles(myUploaded, "myFilesList");
     }
 
     /**
@@ -3496,7 +3533,8 @@
                 $("uploadDesc").value = "";
                 fileInput.value = "";
                 toggleUploadForm();
-                loadFiles();
+                // 上传发生在商店视图, 刷新商店商品列表
+                loadShop();
             }
         } catch (err) {
             // 错误已由 api() 处理
@@ -3915,9 +3953,7 @@
 
         if (accountSource === "new") {
             // 自动注册新4399账号 - 不需要服务器编号, 后续在面板配置中填写
-            payload.server_code = $("createBotNewServerCode")?.value.trim() || "";
         } else if (accountSource === "manual") {
-            payload.server_code = $("createBotServerCode").value.trim();
             const authType = document.querySelector('input[name="manualAuthType"]:checked');
             if (authType && authType.value === "4399") {
                 payload.username_4399 = $("createBotManualUser").value.trim();
@@ -3933,16 +3969,8 @@
                     return;
                 }
             }
-            if (!payload.server_code) {
-                toastError("请填写服务器编号");
-                return;
-            }
         } else if (accountSource === "pool") {
-            payload.server_code = $("createBotPoolServerCode")?.value.trim() || "";
-            if (!payload.server_code) {
-                toastError("请填写服务器编号");
-                return;
-            }
+            // 从Cookie池选择 - 服务器编号后续在面板配置中填写
         }
 
         try {
@@ -3957,12 +3985,9 @@
 
             if (res.success) {
                 toastSuccess("账号创建成功！");
-                $("createBotNewServerCode") && ($("createBotNewServerCode").value = "");
                 $("createBotManualUser") && ($("createBotManualUser").value = "");
                 $("createBotManualPass") && ($("createBotManualPass").value = "");
                 $("createBotSauthJson") && ($("createBotSauthJson").value = "");
-                $("createBotServerCode") && ($("createBotServerCode").value = "");
-                $("createBotPoolServerCode") && ($("createBotPoolServerCode").value = "");
                 switchView("bots");
                 await loadBots();
             } else {

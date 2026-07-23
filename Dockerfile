@@ -59,7 +59,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/ /app/backend/
 
 # 创建上传目录 (用户文件存储)
-RUN mkdir -p /app/backend/data/uploads
+RUN mkdir -p /app/backend/data/uploads /app/backend/data/panel_files
 
 # -----------------------------------------------------------------------------
 # 复制前端代码 (由 FastAPI 静态服务)

@@ -46,15 +46,14 @@ async def list_plugins(
     loaded_count = sum(1 for p in plugins if p.is_loaded)
     enabled_count = sum(1 for p in plugins if plugin_manager.is_enabled(p.plugin_id))
 
-    return success_response(
-        data={
-            "plugins": plugin_dicts,
-            "total": len(plugin_dicts),
-            "loaded_count": loaded_count,
-            "enabled_count": enabled_count,
-        },
+    resp = success_response(
+        data=plugin_dicts,
         message=f"共 {len(plugin_dicts)} 个插件，{loaded_count} 个已加载，{enabled_count} 个已启用",
     )
+    resp["total"] = len(plugin_dicts)
+    resp["loaded_count"] = loaded_count
+    resp["enabled_count"] = enabled_count
+    return resp
 
 
 @router.post("/{plugin_id}/load")

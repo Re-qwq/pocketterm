@@ -2,16 +2,16 @@
 
 路由前缀: ``/api/files``
 
-提供针对插件目录内文件的操作:
+提供针对面板目录内文件的操作:
 
-    - ``GET    "/{plugin_id}"``                    列出插件文件
-    - ``POST   "/{plugin_id}/upload"``             上传文件
-    - ``GET    "/{file_id}/preview"``              文件预览（解析元信息）
-    - ``GET    "/{plugin_id}/{filename:path}"``    下载文件
-    - ``DELETE "/{plugin_id}/{filename:path}"``    删除文件
-    - ``POST   "/{plugin_id}/folder"``             创建目录
+    - ``GET    "/{panel_id}"``                     列出面板文件
+    - ``POST   "/{panel_id}/upload"``              上传文件
+    - ``GET    "/{file_id}/preview"``               文件预览（解析元信息）
+    - ``GET    "/{panel_id}/{filename:path}"``     下载文件
+    - ``DELETE "/{panel_id}/{filename:path}"``     删除文件
+    - ``POST   "/{panel_id}/folder"``              创建目录
 
-所有操作都被限制在 ``PocketTerm/plugins/{plugin_id}/`` 目录内，
+所有操作都被限制在 ``backend/data/panel_files/{panel_id}/`` 目录内，
 通过 ``resolve()`` + ``is_relative_to()`` 双重校验防止路径穿越攻击。
 
 文件预览路由 ``GET /{file_id}/preview`` 会调用
@@ -38,7 +38,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
-from ..config import PLUGINS_DIR
+from ..config import PLUGINS_DIR, DATA_DIR
 from ..logger import get_logger
 from .deps import error_response, get_current_user, success_response
 
@@ -65,6 +65,9 @@ router = APIRouter(prefix="/api/files", tags=["文件管理"])
 #: 单个上传文件大小上限（50 MiB）
 MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024
 
+#: 面板文件根目录 (``backend/data/panel_files``)
+PANEL_FILES_DIR: Path = DATA_DIR / "panel_files"
+
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -85,6 +88,25 @@ def _plugin_root(plugin_id: str) -> Path:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="非法的 plugin_id",
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _panel_root(panel_id: str) -> Path:
+    """返回面板根目录（``data/panel_files/{panel_id}``），自动创建。"""
+    if not panel_id or "/" in panel_id or "\\" in panel_id or ".." in panel_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法的 panel_id",
+        )
+    root = (PANEL_FILES_DIR / panel_id).resolve()
+    try:
+        root.relative_to(PANEL_FILES_DIR.resolve())
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法的 panel_id",
         )
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -143,21 +165,18 @@ def _entry_info(path: Path, root: Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # 路由
 # ---------------------------------------------------------------------------
-@router.get("/{plugin_id}")
-async def list_plugin_files(
-    plugin_id: str,
+@router.get("/{panel_id}")
+async def list_panel_files(
+    panel_id: str,
     path: str = Query("", description="相对子目录路径（默认根目录）"),
     _user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """列出插件目录下的文件与子目录。"""
-    root = _plugin_root(plugin_id)
+    """列出面板目录下的文件与子目录。"""
+    root = _panel_root(panel_id)
     target_dir = _safe_join(root, path) if path else root
 
     if not target_dir.exists():
-        return success_response(
-            data={"entries": [], "path": path or "/", "total": 0},
-            message="目录不存在",
-        )
+        return success_response(data=[], message="目录不存在")
     if not target_dir.is_dir():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -168,25 +187,18 @@ async def list_plugin_files(
     for entry in sorted(target_dir.iterdir(), key=lambda p: (not p.is_dir(), p.name)):
         entries.append(_entry_info(entry, root))
 
-    return success_response(
-        data={
-            "entries": entries,
-            "path": path or "/",
-            "total": len(entries),
-        },
-        message=f"共 {len(entries)} 项",
-    )
+    return success_response(data=entries, message=f"共 {len(entries)} 项")
 
 
-@router.post("/{plugin_id}/upload")
-async def upload_plugin_file(
-    plugin_id: str,
+@router.post("/{panel_id}/upload")
+async def upload_panel_file(
+    panel_id: str,
     file: UploadFile = File(..., description="要上传的文件"),
     path: str = Query("", description="目标子目录（不存在自动创建）"),
     _user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """上传文件到插件目录。"""
-    root = _plugin_root(plugin_id)
+    """上传文件到面板目录。"""
+    root = _panel_root(panel_id)
     target_dir = _safe_join(root, path) if path else root
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -220,12 +232,12 @@ async def upload_plugin_file(
     except HTTPException:
         raise
     except OSError as exc:
-        logger.exception(f"上传文件失败 (plugin={plugin_id}, file={filename})")
+        logger.exception(f"上传文件失败 (panel={panel_id}, file={filename})")
         return error_response(error="upload_failed", message=f"写入失败: {exc}")
     finally:
         await file.close()
 
-    logger.info(f"上传文件 {filename} -> {plugin_id} ({written} bytes)")
+    logger.info(f"上传文件 {filename} -> {panel_id} ({written} bytes)")
     return success_response(
         data={
             "name": filename,
@@ -542,14 +554,14 @@ async def preview_file(
         )
 
 
-@router.get("/{plugin_id}/{filename:path}")
-async def download_plugin_file(
-    plugin_id: str,
+@router.get("/{panel_id}/{filename:path}")
+async def download_panel_file(
+    panel_id: str,
     filename: str,
     _user: Dict[str, Any] = Depends(get_current_user),
 ) -> FileResponse:
-    """下载插件文件。"""
-    root = _plugin_root(plugin_id)
+    """下载面板文件。"""
+    root = _panel_root(panel_id)
     target = _safe_join(root, filename)
 
     if not target.exists():
@@ -565,14 +577,14 @@ async def download_plugin_file(
     return FileResponse(path=str(target), filename=target.name)
 
 
-@router.delete("/{plugin_id}/{filename:path}")
-async def delete_plugin_file(
-    plugin_id: str,
+@router.delete("/{panel_id}/{filename:path}")
+async def delete_panel_file(
+    panel_id: str,
     filename: str,
     _user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """删除插件文件或目录。"""
-    root = _plugin_root(plugin_id)
+    """删除面板文件或目录。"""
+    root = _panel_root(panel_id)
     target = _safe_join(root, filename)
 
     if not target.exists():
@@ -587,21 +599,21 @@ async def delete_plugin_file(
         else:
             target.unlink()
     except OSError as exc:
-        logger.exception(f"删除文件失败 (plugin={plugin_id}, file={filename})")
+        logger.exception(f"删除文件失败 (panel={panel_id}, file={filename})")
         return error_response(error="delete_failed", message=f"删除失败: {exc}")
 
-    logger.info(f"删除 {plugin_id}/{filename}")
+    logger.info(f"删除 {panel_id}/{filename}")
     return success_response(message=f"{filename} 已删除")
 
 
-@router.post("/{plugin_id}/folder")
+@router.post("/{panel_id}/folder")
 async def create_folder(
-    plugin_id: str,
+    panel_id: str,
     name: str = Query(..., description="目录名（可含子路径）"),
     _user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """在插件目录下创建子目录。"""
-    root = _plugin_root(plugin_id)
+    """在面板目录下创建子目录。"""
+    root = _panel_root(panel_id)
     target = _safe_join(root, name)
 
     if target.exists():
@@ -615,10 +627,10 @@ async def create_folder(
     try:
         target.mkdir(parents=True, exist_ok=False)
     except OSError as exc:
-        logger.exception(f"创建目录失败 (plugin={plugin_id}, name={name})")
+        logger.exception(f"创建目录失败 (panel={panel_id}, name={name})")
         return error_response(error="mkdir_failed", message=f"创建失败: {exc}")
 
-    logger.info(f"创建目录 {plugin_id}/{name}")
+    logger.info(f"创建目录 {panel_id}/{name}")
     return success_response(
         data={"path": name, "created_at": time.time()},
         message=f"目录 {name} 已创建",

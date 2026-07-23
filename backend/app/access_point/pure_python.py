@@ -419,11 +419,14 @@ class PurePythonAccessPoint(AccessPoint):
         except Exception as e:
             err_msg = str(e)
             if "code=29" in err_msg or "封禁" in err_msg:
-                self._log("账号已被网易封禁 (code=29)！", "error")
-                self.info.last_error = "账号已被网易封禁"
-            elif "code=32" in err_msg or "维护中" in err_msg:
-                self._log("网易服务器正在维护中 (code=32), 请稍候再试", "error")
-                self.info.last_error = "网易服务器正在维护中, 请稍候再试"
+                self._log("账号已被网易封禁 (code=29)", "error")
+                self.info.last_error = "账号已被网易封禁 (code=29)"
+            elif "code=32" in err_msg:
+                self._log("认证已过期或无效 (code=32), 请检查4399账号池或刷新sauth_json", "error")
+                self.info.last_error = "认证已过期或无效 (code=32), 请检查4399账号池或刷新sauth_json"
+            elif "code=10" in err_msg:
+                self._log("未登录或登录已过期 (code=10), 请检查sauth_json", "error")
+                self.info.last_error = "未登录或登录已过期 (code=10), 请检查sauth_json"
             elif "code=" in err_msg:
                 self._log(f"网易认证失败: {err_msg}", "error")
                 self.info.last_error = f"网易认证失败: {err_msg}"
