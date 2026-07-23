@@ -288,24 +288,35 @@ class SauthRefresher:
     async def _refresh_via_mpay(
         self, username: str, password: str
     ) -> tuple[Optional[str], str]:
-        """混合流程: OAuth2 登录 + SDK info 获取 MPay token → fever_to_sauth 转换。
+        """混合流程: 单一持久化 HTTP 客户端完成 OAuth2 登录 + SDK info → fever_to_sauth。
 
-        1. 使用 OAuth2 流程登录 (不被限流, 可靠)
-        2. 用 OAuth2 登录后的 uid 调用 checkKidLoginUserCookie → 获取 sig/time/validateState
-        3. 调用 sdk/info → 获取 MPay SDK token + sdkuid
-        4. 通过 fever_to_sauth 转换为 netease 频道 sauth_json
+        使用同一个 httpx.AsyncClient 保持 session cookies, 使 OAuth2 登录设置的
+        cookies 能在后续 checkKidLoginUserCookie 调用中复用。
+
+        1. GET OAuth 参数
+        2. 获取验证码 + OCR
+        3. POST loginAndAuthorize (设置 session cookies)
+        4. GET OAuth 回调 → uid
+        5. GET checkKidLoginUserCookie (复用 cookies) → sig/time/validateState
+        6. GET sdk/info → MPay SDK token
+        7. fever_to_sauth → netease 频道 sauth_json
 
         Returns:
             (sauth_json, uid) 或 (None, "")
         """
         import re as _re
         import httpx
+        from urllib.parse import parse_qs, urlparse
         from .netease_direct.login_4399_oauth2 import (
-            Login4399OAuth2,
-            ocr_captcha,
-            generate_captcha_id as _gen_oauth2_captcha_id,
-            fetch_captcha_image as _fetch_oauth2_captcha,
-            USER_AGENT,
+            ocr_captcha as _ocr_captcha,
+            generate_captcha_id as _gen_captcha_id,
+            USER_AGENT as _UA,
+            OAUTH_CALLBACK_URL,
+            LOGIN_AND_AUTHORIZE_URL,
+            REDIRECT_URI,
+            SDK_VERSION,
+            OCR_MAX_ATTEMPTS,
+            CAPTCHA_URL,
         )
         from .netease_direct.login_4399 import (
             _generate_deviceid,
@@ -315,47 +326,107 @@ class SauthRefresher:
         )
         from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
 
-        # Step 1: OAuth2 登录 (可靠, 不被限流)
-        oauth2_client = Login4399OAuth2()
-        oauth2_result = None
-        try:
-            oauth2_result = await oauth2_client.login(username, password)
-        finally:
-            try:
-                await oauth2_client.close()
-            except Exception:
-                pass
-
-        if oauth2_result is None:
-            self._last_refresh_debug["mpay_flow"] = {
-                "status": "oauth2_login_failed",
-            }
-            return None, ""
-
-        uid = oauth2_result.uid
-        self._last_refresh_debug["mpay_flow"] = {
-            "status": "oauth2_login_ok",
-            "uid": uid,
-        }
-
-        # Step 2: 使用持久化 HTTP 客户端调用 checkKidLoginUserCookie + sdk/info
-        # OAuth2 登录已在 ptlogin.4399.com 设置了 session cookies,
-        # 但 OAuth2 流程的 helper 函数各自创建独立 client, 无法共享 cookies。
-        # 这里用 uid 直接调用 checkKidLoginUserCookie (可能需要有效 session cookie)。
+        headers = {"User-Agent": _UA}
         deviceid = _generate_deviceid()
-        mpay_token = ""
-        mpay_sdkuid = uid
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
-            "Referer": "https://ptlogin.4399.com/",
-        }
+        self._last_refresh_debug["mpay_flow"] = {"status": "starting"}
 
         try:
             async with httpx.AsyncClient(
-                timeout=15, follow_redirects=False, headers=headers
+                timeout=30, follow_redirects=False, headers=headers
             ) as client:
-                # checkKidLoginUserCookie
+                # Step 1: GET OAuth 参数
+                resp = await client.get(OAUTH_CALLBACK_URL)
+                oauth_data = resp.json()
+                oauth_url = oauth_data.get("result", "")
+                if not oauth_url:
+                    self._last_refresh_debug["mpay_flow"]["status"] = "no_oauth_url"
+                    return None, ""
+
+                parsed = urlparse(oauth_url)
+                qs = parse_qs(parsed.query)
+                oauth_params = {
+                    "client_id": qs.get("client_id", [""])[0],
+                    "state": qs.get("state", [""])[0],
+                    "redirect_uri": qs.get("redirect_uri", [""])[0],
+                    "ref": qs.get("ref", [""])[0],
+                }
+                if not oauth_params["client_id"]:
+                    self._last_refresh_debug["mpay_flow"]["status"] = "no_client_id"
+                    return None, ""
+
+                # Step 2: 验证码 + OCR (最多重试 OCR_MAX_ATTEMPTS 次)
+                uid = ""
+                login_success = False
+                for attempt in range(OCR_MAX_ATTEMPTS):
+                    captcha_id = _gen_captcha_id()
+                    captcha_img = await client.get(
+                        f"{CAPTCHA_URL}?captchaId={captcha_id}"
+                    )
+                    captcha_answer = await _ocr_captcha(captcha_img.content)
+                    if not captcha_answer or len(captcha_answer) < 4:
+                        continue
+
+                    # Step 3: POST loginAndAuthorize
+                    form = {
+                        "auth_action": "ORILOGIN",
+                        "bizId": "2100001792",
+                        "captcha": captcha_answer,
+                        "captcha_id": captcha_id,
+                        "client_id": oauth_params["client_id"],
+                        "isInputRealname": "false",
+                        "isVaildRealname": "false",
+                        "password": password,
+                        "redirect_uri": REDIRECT_URI,
+                        "ref": oauth_params["ref"],
+                        "response_type": "TOKEN",
+                        "scope": "basic",
+                        "sec": "0",
+                        "state": oauth_params["state"],
+                        "username": username,
+                    }
+                    login_url = (
+                        f"{LOGIN_AND_AUTHORIZE_URL}"
+                        f"?channel=&sdk=op&sdk_version={SDK_VERSION}"
+                    )
+                    resp = await client.post(login_url, data=form)
+                    body = resp.text
+
+                    if resp.status_code == 202:
+                        # 限流, 等待重试
+                        import asyncio as _asyncio
+                        await _asyncio.sleep(3)
+                        continue
+
+                    if not body:
+                        location = resp.headers.get("location", "")
+                        if location:
+                            # Step 4: GET OAuth 回调 → uid
+                            cb_resp = await client.get(location)
+                            cb_data = cb_resp.json()
+                            result_obj = cb_data.get("result", {})
+                            uid = str(result_obj.get("uid", ""))
+                            if uid:
+                                login_success = True
+                                break
+                        continue
+
+                    if "验证码错误" in body:
+                        continue
+                    # 其他错误
+                    m = _re.search(r'id="login_err_msg"\s*>\s*([^<]*)\s*<', body)
+                    if m and m.group(1).strip():
+                        self._last_refresh_debug["mpay_flow"]["login_error"] = m.group(1).strip()
+                    continue
+
+                if not login_success:
+                    self._last_refresh_debug["mpay_flow"]["status"] = "login_failed"
+                    return None, ""
+
+                self._last_refresh_debug["mpay_flow"]["status"] = "login_ok"
+                self._last_refresh_debug["mpay_flow"]["uid"] = uid
+
+                # Step 5: GET checkKidLoginUserCookie (复用 session cookies!)
                 import time as _time_mod
                 rand_time = str(int(_time_mod.time() * 1000))
                 check_url = (
@@ -363,7 +434,6 @@ class SauthRefresher:
                 )
                 resp = await client.get(check_url)
 
-                # 提取 sig, uid, time, validateState from redirect
                 if resp.status_code in (301, 302):
                     redirect_url = resp.headers.get("location", "")
                 else:
@@ -385,9 +455,8 @@ class SauthRefresher:
                     return None, ""
 
                 self._last_refresh_debug["mpay_flow"]["check_cookie"] = "ok"
-                self._last_refresh_debug["mpay_flow"]["sig"] = sig[:20]
 
-                # sdk/info
+                # Step 6: GET sdk/info → MPay SDK token
                 query_str = _SDK_QUERY.format(
                     game_id="500352",
                     sig=sig,
@@ -417,7 +486,8 @@ class SauthRefresher:
                 self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
 
         except Exception as e:
-            self._last_refresh_debug["mpay_flow"]["sdk_info_error"] = str(e)
+            self._last_refresh_debug["mpay_flow"]["status"] = "exception"
+            self._last_refresh_debug["mpay_flow"]["error"] = str(e)
             logger.warning(f"获取 MPay token 异常: {e}")
             return None, ""
 
@@ -426,7 +496,7 @@ class SauthRefresher:
             logger.warning("未获取到 MPay token")
             return None, ""
 
-        # Step 3: 通过 fever_to_sauth 转换为 netease 频道
+        # Step 7: 通过 fever_to_sauth 转换为 netease 频道
         self._last_refresh_debug["mpay_flow"]["deviceid"] = deviceid
 
         try:
