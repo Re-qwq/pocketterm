@@ -581,7 +581,7 @@ async def get_bot(bot_id: str, request: Request):
     bot = await _get_bot_with_access(bot_id, user, db)
 
     # 尝试从内存中获取实时状态和错误信息
-    last_error = bot.get("last_error", "") or ""
+    last_error = bot["last_error"] if "last_error" in bot.keys() else ""
     runtime_logs = []
     try:
         from app.bot.manager import bot_manager
@@ -679,7 +679,7 @@ async def debug_bot(bot_id: str, request: Request):
             "bot_id": bot["bot_id"],
             "name": bot["name"],
             "db_status": bot["status"],
-            "db_last_error": bot.get("last_error", ""),
+            "db_last_error": bot["last_error"] if "last_error" in bot.keys() else "",
             "db_config": json.loads(bot["config"]) if bot["config"] else {},
             "config_info": config_info,
             "memory_info": mem_info,
