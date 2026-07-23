@@ -477,47 +477,62 @@ class SauthRefresher:
                 )
 
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
-                # gameUrl 必须设置, 否则返回 "no protocol" 错误
+                # gameUrl 必须设置, 尝试多个值找到正确的
                 from urllib.parse import quote as _url_quote
-                check_url = (
-                    f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
-                    f"&gameUrl={_url_quote(SDK_INFO_URL, safe='')}"
-                    f"&rand_time={rand_time}"
-                )
-                resp2 = await client.get(check_url, follow_redirects=False)
 
-                # 记录 check_cookie 响应详情
-                self._last_refresh_debug["mpay_flow"]["check_status"] = (
-                    resp2.status_code
-                )
+                game_url_candidates = [
+                    SDK_INFO_URL,                         # SDK info URL
+                    "http://microgame.5054399.net/",       # 游戏域名根
+                    "http://www.4399.com/",                # 4399 主站
+                    "https://ptlogin.4399.com/",           # 登录页
+                    "http://microgame.5054399.net/v2/",    # 游戏v2路径
+                ]
+
+                sig = ""
+                ck_uid = ""
+                login_time = ""
+                validate_state = ""
+
+                for game_url in game_url_candidates:
+                    check_url = (
+                        f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
+                        f"&gameUrl={_url_quote(game_url, safe='')}"
+                        f"&rand_time={rand_time}"
+                    )
+                    resp2 = await client.get(check_url, follow_redirects=False)
+
+                    if resp2.status_code in (301, 302, 303, 307, 308):
+                        redirect_url = resp2.headers.get("location", "")
+                    else:
+                        redirect_url = resp2.text
+
+                    # 检查是否有 sig
+                    sig_match = _re.search(r"sig=([^&]+)", redirect_url)
+                    if sig_match:
+                        sig = sig_match.group(1)
+                        uid_match = _re.search(r"uid=([^&]+)", redirect_url)
+                        time_match = _re.search(r"time=([^&]+)", redirect_url)
+                        state_match = _re.search(r"validateState=([^&]+)", redirect_url)
+                        ck_uid = uid_match.group(1) if uid_match else ""
+                        login_time = time_match.group(1) if time_match else ""
+                        validate_state = state_match.group(1) if state_match else ""
+                        self._last_refresh_debug["mpay_flow"]["working_gameUrl"] = game_url
+                        break
+
+                    # 记录每个 gameUrl 的响应状态
+                    error_match = _re.search(r'<strong>([^<]+)</strong>', redirect_url)
+                    error_msg = error_match.group(1).strip() if error_match else ""
+                    self._last_refresh_debug["mpay_flow"][f"gameUrl_{game_url[:30]}"] = (
+                        f"status={resp2.status_code}, error={error_msg[:50]}"
+                    )
+
+                # 使用最后一个响应作为调试信息
+                self._last_refresh_debug["mpay_flow"]["check_status"] = resp2.status_code
                 self._last_refresh_debug["mpay_flow"]["check_location"] = (
                     resp2.headers.get("location", "")[:500]
                 )
-
-                # 提取 sig/uid/time/validateState from redirect URL or text
-                if resp2.status_code in (301, 302, 303, 307, 308):
-                    redirect_url = resp2.headers.get("location", "")
-                else:
-                    redirect_url = resp2.text
-
-                # 捕获更多响应内容 (3000 chars) 用于分析
                 self._last_refresh_debug["mpay_flow"]["check_redirect_3000"] = (
                     redirect_url[:3000]
-                )
-
-                # FIX: 使用 redirect_url (之前误用 redirect_text)
-                sig_match = _re.search(r"sig=([^&]+)", redirect_url)
-                uid_match = _re.search(r"uid=([^&]+)", redirect_url)
-                time_match = _re.search(r"time=([^&]+)", redirect_url)
-                state_match = _re.search(
-                    r"validateState=([^&]+)", redirect_url
-                )
-
-                sig = sig_match.group(1) if sig_match else ""
-                ck_uid = uid_match.group(1) if uid_match else ""
-                login_time = time_match.group(1) if time_match else ""
-                validate_state = (
-                    state_match.group(1) if state_match else ""
                 )
 
                 # 初始化 MPay token 变量
