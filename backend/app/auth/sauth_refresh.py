@@ -288,16 +288,20 @@ class SauthRefresher:
     async def _refresh_via_mpay(
         self, username: str, password: str
     ) -> tuple[Optional[str], str]:
-        """非 OAuth2 流程: 持久化客户端 + 预设 cookies → login.do → sdk/info → fever_to_sauth。
+        """非 OAuth2 流程: AES 加密密码 → login.do → checkKidLoginUserCookie → sdk/info → fever_to_sauth。
 
-        使用单一 httpx.AsyncClient 保持所有 cookies, 先访问登录页面建立 session,
-        再 POST login.do, 避免 "请稍后再试~" 限流。
+        4399 的 login.do 在 sec=1 时要求密码使用 CryptoJS AES 加密
+        (密钥: 'lzYW5qaXVqa', OpenSSL 格式)。
 
         Returns:
             (sauth_json, uid) 或 (None, "")
         """
         import re as _re
+        import os as _os
+        import hashlib as _hashlib
+        import base64 as _base64
         import httpx
+        from Crypto.Cipher import AES as _AES
         from .netease_direct.login_4399 import (
             _generate_deviceid,
             VERIFY_URL,
@@ -309,6 +313,35 @@ class SauthRefresher:
         )
         from .netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
         from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
+
+        _AES_PASSPHRASE = "lzYW5qaXVqa"
+
+        def _cryptojs_aes_encrypt(data: str, passphrase: str) -> str:
+            """CryptoJS 兼容的 AES-256-CBC 加密 (OpenSSL 格式)。
+
+            与 CryptoJS.AES.encrypt(data, passphrase).toString() 一致:
+            - 随机 8 字节 salt
+            - EVP_BytesToKey (MD5) 密钥派生
+            - PKCS7 填充
+            - 输出: base64("Salted__" + salt + ciphertext)
+            """
+            salt = _os.urandom(8)
+            d = b""
+            d_i = b""
+            while len(d) < 48:
+                d_i = _hashlib.md5(
+                    d_i + passphrase.encode("utf-8") + salt
+                ).digest()
+                d += d_i
+            key, iv = d[:32], d[32:48]
+            data_bytes = data.encode("utf-8")
+            pad_len = 16 - (len(data_bytes) % 16)
+            padded = data_bytes + bytes([pad_len] * pad_len)
+            cipher = _AES.new(key, _AES.MODE_CBC, iv)
+            encrypted = cipher.encrypt(padded)
+            return _base64.b64encode(
+                b"Salted__" + salt + encrypted
+            ).decode("utf-8")
 
         _HEADERS = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
@@ -353,7 +386,12 @@ class SauthRefresher:
 
                 self._last_refresh_debug["mpay_flow"]["captcha_answer"] = bool(captcha_answer)
 
-                # Step 4: POST login.do (不自动重定向, 手动处理)
+                # Step 4: POST login.do (AES 加密密码, sec=1)
+                # 4399 login.do 的 check_login JS 在 sec=1 时用
+                # CryptoJS.AES.encrypt(password, 'lzYW5qaXVqa') 加密密码
+                encrypted_pwd = _cryptojs_aes_encrypt(password, _AES_PASSPHRASE)
+                self._last_refresh_debug["mpay_flow"]["pwd_encrypted"] = True
+
                 login_data = {
                     "loginFrom": "uframe",
                     "postLoginHandler": "default",
@@ -366,14 +404,14 @@ class SauthRefresher:
                     "gameId": "wd",
                     "css": "http://microgame.5054399.net/v2/resource/cssSdk/default/login.css",
                     "redirectUrl": "",
-                    "sessionId": captcha_id,
+                    "sessionId": "",
                     "mainDivId": "popup_login_div",
                     "includeFcmInfo": "false",
                     "level": "8",
                     "regLevel": "8",
                     "userNameLabel": "4399用户名",
                     "username": username,
-                    "password": password,
+                    "password": encrypted_pwd,
                     "welcomeTip": "欢迎回到4399",
                     "sec": "1",
                     "inputCaptcha": captcha_answer,
