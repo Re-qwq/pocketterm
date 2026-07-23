@@ -288,7 +288,7 @@ class SauthRefresher:
     async def _refresh_via_mpay(
         self, username: str, password: str
     ) -> tuple[Optional[str], str]:
-        """非 OAuth2 流程: AES 加密密码 → login.do → checkKidLoginUserCookie → sdk/info → fever_to_sauth。
+        """非 OAuth2 流程: AES 加密密码 → login.do → checkKidLoginUserCookie → sdk/info → uni_sauth。
 
         4399 的 login.do 在 sec=1 时要求密码使用 CryptoJS AES 加密
         (密钥: 'lzYW5qaXVqa', OpenSSL 格式)。
@@ -299,6 +299,8 @@ class SauthRefresher:
         - checkKidLoginUserCookie 必须带完整参数 (gameUrl/nick/onLineStart/show/isCrossDomain/retUrl)
         - sdk/info 的 queryStr 必须完整 URL 编码, 包含 nick/fcm/show/isCrossDomain/rand_time/ptusertype
         - SDK 响应中 sdk_login_data 是字符串 (token=XXX&sdkuid=YYY), 不是字典
+        - Step 7 使用 uni_sauth (不是 fever_to_sauth, 因为 SDK token 不是 MPay token)
+        - sauth_json 必须包含 realname/timestamp/userid 字段, 否则 uni_sauth 返回 502
 
         Returns:
             (sauth_json, uid) 或 (None, "")
@@ -319,7 +321,6 @@ class SauthRefresher:
             SDK_INFO_URL,
         )
         from .netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
-        from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
 
         _AES_PASSPHRASE = "lzYW5qaXVqa"
 
@@ -590,44 +591,85 @@ class SauthRefresher:
             return None, ""
 
         if not mpay_token:
-            self._last_refresh_debug["mpay_flow"]["mpay_token"] = "empty"
-            logger.warning("未获取到 MPay token")
+            self._last_refresh_debug["mpay_flow"]["status"] = "no_token"
+            logger.warning("未获取到 SDK token")
             return None, ""
 
-        # Step 7: fever_to_sauth → netease 频道
-        # 使用 32 位 HEX 设备 ID (不是 "amaw..." 格式, 否则 MPay API 返回 1003)
+        # Step 7: 构建 4399pc sauth_json → uni_sauth 统一认证
+        # 参考 account_register.py 完整流程 (不使用 fever_to_sauth, 因为 SDK token 不是 MPay token)
+        # 流程: 构建 4399pc 频道 sauth_json (含 realname/timestamp/userid)
+        #       → uni_sauth 服务端转换 (WPFLauncher UA)
+        #       → 使用原始 4399pc sauth_json (uni_sauth 是服务端 side-effect)
         import secrets as _secrets
 
         _hex_chars = "0123456789ABCDEF"
-        mpay_deviceid = "".join(_secrets.choice(_hex_chars) for _ in range(32))
-        self._last_refresh_debug["mpay_flow"]["deviceid"] = mpay_deviceid
+        _fp = {
+            "client_login_sn": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
+            "deviceid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
+            "udid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
+        }
+        _sauth_inner = {
+            "aim_info": '{"aim":"127.0.0.1","country":"CN","tz":"+0800","tzid":""}',
+            "app_channel": "4399pc",
+            "client_login_sn": _fp["client_login_sn"],
+            "deviceid": _fp["deviceid"],
+            "gameid": "x19",
+            "gas_token": "",
+            "ip": "127.0.0.1",
+            "login_channel": "4399pc",
+            "platform": "pc",
+            "realname": '{"realname_type":"0"}',
+            "sdk_version": "1.0.0",
+            "sdkuid": mpay_sdkuid,
+            "sessionid": mpay_token,
+            "source_platform": "pc",
+            "timestamp": rand_time,
+            "udid": _fp["udid"],
+            "userid": username.lower(),
+        }
+        _sauth_inner_str = json.dumps(_sauth_inner, ensure_ascii=False)
+        _sauth_wrapped = json.dumps(
+            {"sauth_json": _sauth_inner_str}, ensure_ascii=False
+        )
 
+        _UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
+        _uni_headers = {
+            "User-Agent": "WPFLauncher/0.0.0.0",
+            "Content-Type": "application/json",
+        }
         try:
-            convert_result = await _fever_to_sauth(
-                sdkuid=mpay_sdkuid,
-                sessionid=mpay_token,
-                deviceid=mpay_deviceid,
-            )
-            if convert_result.get("success"):
-                logger.info(
-                    f"fever_to_sauth 转换成功, "
-                    f"已切换到 netease 频道 (账号: {username})"
+            async with httpx.AsyncClient(timeout=15, verify=False) as _uni_client:
+                _uni_resp = await _uni_client.post(
+                    _UNI_SAUTH_URL,
+                    content=_sauth_inner_str.encode("utf-8"),
+                    headers=_uni_headers,
                 )
-                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "success"
-                self._last_refresh_debug["final_channel"] = "netease"
-                return convert_result["sauth_json"], mpay_sdkuid
+            try:
+                _uni_data = _uni_resp.json()
+            except Exception:
+                _uni_data = {}
+            _uni_code = _uni_data.get("code", -1)
+            self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = _uni_code
+            self._last_refresh_debug["mpay_flow"]["uni_sauth_resp_500"] = (
+                _uni_resp.text[:500]
+            )
+
+            if _uni_code == 0:
+                logger.info(f"uni_sauth 成功 (账号: {username})")
+                self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "success"
+                self._last_refresh_debug["final_channel"] = "4399pc+uni_sauth"
+                return _sauth_wrapped, mpay_sdkuid
             else:
                 logger.warning(
-                    f"fever_to_sauth 转换失败: "
-                    f"{convert_result.get('message', '')}"
+                    f"uni_sauth 失败: code={_uni_code}, "
+                    f"resp={_uni_resp.text[:200]}"
                 )
-                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "failed"
-                self._last_refresh_debug["mpay_flow"]["fever_error"] = convert_result.get("message", "")[:500]
+                self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "failed"
                 return None, ""
-        except Exception as convert_err:
-            logger.warning(f"fever_to_sauth 异常: {convert_err}")
-            self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "exception"
-            self._last_refresh_debug["mpay_flow"]["fever_error"] = str(convert_err)
+        except Exception as _uni_err:
+            self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "exception"
+            self._last_refresh_debug["mpay_flow"]["uni_error"] = str(_uni_err)
+            logger.warning(f"uni_sauth 异常: {_uni_err}")
             return None, ""
 
     async def _refresh_via_oauth2(
