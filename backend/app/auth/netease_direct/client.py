@@ -651,11 +651,17 @@ class NeteaseDirectClient:
             orig_client_login_sn = str(inner_data.get("client_login_sn", "")) or ""
             orig_sdk_version = str(inner_data.get("sdk_version", "")) or ""
             orig_source_platform = str(inner_data.get("source_platform", "")) or ""
+            # 保留原始 login_channel/app_channel/platform:
+            # 4399com 频道必须保留 platform=ad 和 channel=4399com,
+            # 否则 authentication-otp 会返回错误。
+            orig_login_channel = str(inner_data.get("login_channel", "")) or "netease"
+            orig_app_channel = str(inner_data.get("app_channel", "")) or "netease"
+            orig_platform = str(inner_data.get("platform", "")) or "pc"
             auth_sauth = {
                 "gameid": "x19",
-                "login_channel": "netease",
-                "app_channel": "netease",
-                "platform": "pc",
+                "login_channel": orig_login_channel,
+                "app_channel": orig_app_channel,
+                "platform": orig_platform,
                 "sdkuid": str(inner_data.get("sdkuid", "")),
                 "sessionid": str(inner_data.get("sessionid", "")),
                 # 保留原始 sdk_version (如 5.9.0), 仅在缺失时用 SDK_VERSION_PC
@@ -675,6 +681,10 @@ class NeteaseDirectClient:
             orig_nickname = str(inner_data.get("nickname", "")) or ""
             if orig_nickname:
                 auth_sauth["nickname"] = orig_nickname
+            # 保留原始 realname (4399 频道的 sauth_json 包含 realname 字段)
+            orig_realname = str(inner_data.get("realname", "")) or ""
+            if orig_realname:
+                auth_sauth["realname"] = orig_realname
             auth_sauth_json = json.dumps(auth_sauth, ensure_ascii=False)
         except (json.JSONDecodeError, TypeError):
             auth_sauth_json = inner_sauth
@@ -870,6 +880,9 @@ class NeteaseDirectClient:
 
         如果输入已经是 PC 格式, 补充缺失字段后返回。
         如果无法解析, 原样返回。
+
+        重要: 4399com 等 4399 频道的 sauth_json 必须保留 platform=ad,
+        否则 login-otp 会返回 code=32 (session 失效)。
         """
         try:
             data = json.loads(inner_sauth)
@@ -878,21 +891,23 @@ class NeteaseDirectClient:
 
             changed = False
 
-            # PE → PC 转换
+            # 4399 频道 (4399com, 4399pc) 的 platform 必须保留原始值 (通常是 "ad"),
+            # 不能改为 "pc", 否则 login-otp 返回 code=32
+            login_channel = data.get("login_channel", "") or data.get("app_channel", "")
+            is_4399_channel = login_channel.startswith("4399")
+
+            # PE → PC 转换 (仅对非 4399 频道执行 platform 转换)
             if data.get("gameid") != "x19":
                 data["gameid"] = "x19"
                 changed = True
-            if data.get("platform") != "pc":
+            if not is_4399_channel and data.get("platform") != "pc":
                 data["platform"] = "pc"
                 changed = True
             # 防封修复: 不覆盖已有的 sdk_version
-            # 之前会把真实的 sdk_version (如 5.9.0) 覆盖为 SDK_VERSION_PC (3.4.0),
-            # 导致版本不匹配被反作弊系统检测。仅在字段缺失时填充默认值。
             if not data.get("sdk_version"):
                 data["sdk_version"] = SDK_VERSION_PC
                 changed = True
             # source_platform: 保留原始值, 不强制修改
-            # (真实 sauth_json 的 source_platform 可能是 "netease", 应保留)
 
             if not changed:
                 return inner_sauth
