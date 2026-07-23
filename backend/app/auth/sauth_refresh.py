@@ -390,82 +390,98 @@ class SauthRefresher:
 
                 self._last_refresh_debug["mpay_flow"]["login_status"] = login_status
                 self._last_refresh_debug["mpay_flow"]["login_location"] = login_location[:300]
-                self._last_refresh_debug["mpay_flow"]["login_text_500"] = login_text[:500]
+                self._last_refresh_debug["mpay_flow"]["login_text_2000"] = login_text[:2000]
+                # 捕获 Set-Cookie 和客户端 cookies
+                self._last_refresh_debug["mpay_flow"]["login_set_cookies"] = [
+                    v for k, v in login_resp.headers.multi_items()
+                    if k.lower() == "set-cookie"
+                ][:5]
+                self._last_refresh_debug["mpay_flow"]["client_cookies"] = {
+                    k: v[:50] for k, v in client.cookies.items()
+                }
 
-                # 检查登录是否成功
-                # 可能的情况:
-                # 1. 200 + "登录成功" in body → 直接成功
-                # 2. 302 redirect → 跟随重定向
-                # 3. 200 + loading page → 需要提取 rand_time 或 redirect URL
-                login_ok = False
+                # login.do 现在返回加载页面 (JavaScript 处理), 但 Set-Cookie
+                # 已在 HTTP 头中设置。不再检查 "登录成功" 字样, 直接继续到
+                # checkKidLoginUserCookie。
                 rand_time = str(int(_time_mod.time() * 1000))
 
+                # 尝试提取 rand_time (如果存在于响应中)
+                rt_match = _re.search(r'"rand_time"\s*:\s*(\d+)', login_text)
+                if rt_match:
+                    rand_time = rt_match.group(1)
+
+                # 如果是重定向, 跟随一次
                 if login_status in (301, 302, 303, 307, 308) and login_location:
-                    # 跟随重定向
                     resp_redirect = await client.get(login_location)
-                    redirect_text = resp_redirect.text
-                    if "登录成功" in redirect_text:
-                        login_ok = True
-                    # 提取 rand_time
-                    rt_match = _re.search(r'"rand_time"\s*:\s*(\d+)', redirect_text)
-                    if rt_match:
-                        rand_time = rt_match.group(1)
-                elif "登录成功" in login_text:
-                    login_ok = True
-                    rt_match = _re.search(r'"rand_time"\s*:\s*(\d+)', login_text)
-                    if rt_match:
-                        rand_time = rt_match.group(1)
-                elif "rand_time" in login_text:
-                    rt_match = _re.search(r'"rand_time"\s*:\s*(\d+)', login_text)
-                    if rt_match:
-                        rand_time = rt_match.group(1)
-                        login_ok = True  # 有 rand_time 说明登录成功
+                    rt_match2 = _re.search(
+                        r'"rand_time"\s*:\s*(\d+)', resp_redirect.text
+                    )
+                    if rt_match2:
+                        rand_time = rt_match2.group(1)
 
-                # 检查是否有重定向 URL 嵌入在 HTML 中
-                if not login_ok:
-                    # 尝试提取 HTML 中的跳转 URL
-                    url_match = _re.search(r'(?:location\.href|window\.location|url)\s*=\s*["\']([^"\']+)["\']', login_text)
-                    if url_match:
-                        redirect_url = url_match.group(1)
-                        self._last_refresh_debug["mpay_flow"]["html_redirect"] = redirect_url[:300]
-                        resp_redirect = await client.get(redirect_url)
-                        redirect_text = resp_redirect.text
-                        if "登录成功" in redirect_text or "rand_time" in redirect_text:
-                            login_ok = True
-                            rt_match = _re.search(r'"rand_time"\s*:\s*(\d+)', redirect_text)
-                            if rt_match:
-                                rand_time = rt_match.group(1)
+                # 尝试提取 HTML 中的跳转 URL
+                url_match = _re.search(
+                    r'(?:location\.href|window\.location|url)\s*=\s*'
+                    r'["\']([^"\']+)["\']',
+                    login_text,
+                )
+                if url_match:
+                    self._last_refresh_debug["mpay_flow"]["html_redirect"] = (
+                        url_match.group(1)[:300]
+                    )
 
-                if not login_ok:
-                    self._last_refresh_debug["mpay_flow"]["status"] = "login_failed"
-                    return None, ""
+                # 等待 1 秒, 让服务器完成登录处理
+                import asyncio as _asyncio_mod
+                await _asyncio_mod.sleep(1)
 
-                self._last_refresh_debug["mpay_flow"]["status"] = "login_ok"
+                self._last_refresh_debug["mpay_flow"]["status"] = (
+                    "proceeding_to_check_cookie"
+                )
 
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
-                rand_time2 = str(int(_time_mod.time() * 1000))
-                check_url = f"{CHECK_COOKIE_URL}?appId=kid_wdsj&gameUrl=&rand_time={rand_time2}"
+                check_url = (
+                    f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
+                    f"&gameUrl=&rand_time={rand_time}"
+                )
                 resp2 = await client.get(check_url, follow_redirects=False)
 
-                # 提取 sig/uid/time/validateState from redirect
+                # 记录 check_cookie 响应详情
+                self._last_refresh_debug["mpay_flow"]["check_status"] = (
+                    resp2.status_code
+                )
+                self._last_refresh_debug["mpay_flow"]["check_location"] = (
+                    resp2.headers.get("location", "")[:500]
+                )
+
+                # 提取 sig/uid/time/validateState from redirect URL or text
                 if resp2.status_code in (301, 302, 303, 307, 308):
                     redirect_url = resp2.headers.get("location", "")
                 else:
                     redirect_url = resp2.text
 
-                sig_match = _re.search(r"sig=([^&]+)", redirect_text)
-                uid_match = _re.search(r"uid=([^&]+)", redirect_text)
-                time_match = _re.search(r"time=([^&]+)", redirect_text)
-                state_match = _re.search(r"validateState=([^&]+)", redirect_text)
+                self._last_refresh_debug["mpay_flow"]["check_redirect_500"] = (
+                    redirect_url[:500]
+                )
+
+                # FIX: 使用 redirect_url (之前误用 redirect_text)
+                sig_match = _re.search(r"sig=([^&]+)", redirect_url)
+                uid_match = _re.search(r"uid=([^&]+)", redirect_url)
+                time_match = _re.search(r"time=([^&]+)", redirect_url)
+                state_match = _re.search(
+                    r"validateState=([^&]+)", redirect_url
+                )
 
                 sig = sig_match.group(1) if sig_match else ""
                 ck_uid = uid_match.group(1) if uid_match else ""
                 login_time = time_match.group(1) if time_match else ""
-                validate_state = state_match.group(1) if state_match else ""
+                validate_state = (
+                    state_match.group(1) if state_match else ""
+                )
 
                 if not sig:
-                    self._last_refresh_debug["mpay_flow"]["check_cookie"] = "no_sig"
-                    self._last_refresh_debug["mpay_flow"]["check_redirect"] = redirect_url[:300]
+                    self._last_refresh_debug["mpay_flow"]["check_cookie"] = (
+                        "no_sig"
+                    )
                     return None, ""
 
                 self._last_refresh_debug["mpay_flow"]["check_cookie"] = "ok"
