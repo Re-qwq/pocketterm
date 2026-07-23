@@ -364,11 +364,13 @@ class SauthRefresher:
                 ts = int(_time_mod.time() * 1000)
                 verify_url = f"{VERIFY_URL}?username={username}&appId=kid_wdsj&t={ts}&inputWidth=iptw2"
                 resp = await client.get(verify_url)
-                verify_text = resp.text
-                need_captcha = "captchaId" in verify_text or '"code":0' not in verify_text
+                verify_text = resp.text.strip()
 
-                # BUG FIX: 从 verify.do 响应中提取 captchaId
-                # (之前自己生成, 与服务器 session 不匹配)
+                # verify.do 返回 "0" 表示不需要验证码, 其他值表示需要
+                need_captcha = verify_text != "0"
+                self._last_refresh_debug["mpay_flow"]["verify_resp"] = verify_text[:200]
+
+                # 从 verify.do 响应中提取 captchaId
                 captcha_id = ""
                 if need_captcha:
                     m = _re.search(r'captchaId=([A-Za-z0-9]+)', verify_text)
