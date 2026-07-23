@@ -478,11 +478,24 @@ class SauthRefresher:
 
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
                 # gameUrl 保持空字符串 (与原始 login_4399.py 一致)
+                # BUG FIX: httpx cookie jar 可能不正确匹配 Domain=4399.com 的 cookies
+                # 到 ptlogin.4399.com 子域名, 手动提取 cookies 设置到请求头
                 check_url = (
                     f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
                     f"&gameUrl=&rand_time={rand_time}"
                 )
-                resp2 = await client.get(check_url, follow_redirects=False)
+
+                # 手动构建 Cookie 头, 确保 cookies 被正确发送
+                cookie_parts = []
+                for k, v in client.cookies.items():
+                    cookie_parts.append(f"{k}={v}")
+                cookie_header = "; ".join(cookie_parts)
+
+                resp2 = await client.get(
+                    check_url,
+                    follow_redirects=False,
+                    headers={"Cookie": cookie_header} if cookie_header else {},
+                )
 
                 self._last_refresh_debug["mpay_flow"]["check_status"] = (
                     resp2.status_code
@@ -496,8 +509,8 @@ class SauthRefresher:
                 else:
                     redirect_url = resp2.text
 
-                self._last_refresh_debug["mpay_flow"]["check_redirect_500"] = (
-                    redirect_url[:500]
+                self._last_refresh_debug["mpay_flow"]["check_redirect_3000"] = (
+                    redirect_url[:3000]
                 )
 
                 sig_match = _re.search(r"sig=([^&]+)", redirect_url)
