@@ -1246,6 +1246,30 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     border-top: 1px solid var(--border-muted);
 }
 
+/* MPay 登录步骤指示器 */
+.mpay-step {
+    flex: 1;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    padding: 6px 4px;
+    background: var(--bg-input);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-muted);
+    transition: all var(--transition);
+}
+.mpay-step.active {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+    background: rgba(88,166,255,0.08);
+}
+.mpay-step.done {
+    color: var(--color-success);
+    border-color: var(--color-success);
+    background: rgba(63,185,80,0.08);
+}
+
 /* ==========================================================================
    Toast Notifications
    ========================================================================== */
@@ -2228,6 +2252,21 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 </button>
                 <h3 style="margin:0;"><i class="fas fa-plus-circle"></i> 创建游戏账号</h3>
             </div>
+
+            <!-- MPay 手机号登录 (网易官方 API, 免费) -->
+            <div class="auth-card" style="max-width:500px;margin:0 auto 20px auto;padding:16px;border:1px solid var(--color-primary);border-left:3px solid var(--color-primary);">
+                <div style="display:flex;align-items:flex-start;gap:12px;">
+                    <i class="fas fa-mobile-alt" style="color:var(--color-primary);font-size:22px;margin-top:2px;"></i>
+                    <div style="flex:1;">
+                        <div style="font-size:14px;font-weight:700;color:var(--text-primary);">MPay 手机号登录 <span class="badge badge-success" style="margin-left:6px;">推荐 · 免费</span></div>
+                        <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;">通过网易官方 MPay API 用手机号登录, 自动生成可用 sauth_json</div>
+                        <button class="btn btn-primary" id="btnMpayLogin" style="margin-top:12px;">
+                            <i class="fas fa-mobile-alt"></i> MPay 手机号登录
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="auth-card" style="max-width:500px;margin:0 auto;">
                 <div class="form-group">
                     <label class="form-label"><i class="fas fa-user-shield"></i> 账号来源</label>
@@ -3185,6 +3224,98 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
             <button class="btn btn-secondary" data-modal-close>取消</button>
             <button class="btn btn-primary" id="createAnnouncementSubmit" type="button">
                 <i class="fas fa-check"></i> 发布
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- MPay 手机号登录 Modal -->
+<div class="modal-overlay" id="modalMpayLogin">
+    <div class="modal" style="max-width:460px;">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fas fa-mobile-alt"></i> MPay 手机号登录</div>
+            <div class="modal-close" data-modal-close><i class="fas fa-times"></i></div>
+        </div>
+        <div class="modal-body">
+            <!-- 步骤指示器 -->
+            <div style="display:flex;gap:6px;margin-bottom:16px;">
+                <div class="mpay-step" id="mpayStep1">1. 设备</div>
+                <div class="mpay-step" id="mpayStep2">2. 手机号</div>
+                <div class="mpay-step" id="mpayStep3">3. 验证</div>
+            </div>
+
+            <!-- 步骤1: 设备注册 (自动) -->
+            <div id="mpayDeviceLoading" style="text-align:center;padding:20px 0;">
+                <i class="fas fa-spinner fa-spin" style="font-size:24px;color:var(--color-primary);"></i>
+                <div style="font-size:13px;color:var(--text-secondary);margin-top:12px;">正在注册设备...</div>
+                <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">这是自动步骤, 无需操作</div>
+            </div>
+
+            <!-- 步骤2: 手机号输入 -->
+            <div id="mpayPhoneStep" style="display:none;">
+                <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:16px;">
+                    <div style="font-size:12px;color:var(--text-secondary);">
+                        <i class="fas fa-check-circle" style="color:var(--color-success);"></i> 设备注册成功
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="mpayPhone">
+                        <i class="fas fa-phone"></i> 手机号
+                    </label>
+                    <input type="tel" class="form-input" id="mpayPhone" maxlength="11"
+                           placeholder="请输入 11 位手机号" inputmode="numeric"
+                           style="font-size:15px;letter-spacing:1px;">
+                </div>
+            </div>
+
+            <!-- 步骤3a: 验证码输入 (normal 模式) -->
+            <div id="mpayCodeStep" style="display:none;">
+                <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:16px;">
+                    <div style="font-size:12px;color:var(--text-secondary);">
+                        <i class="fas fa-sms" style="color:var(--color-primary);"></i>
+                        验证码已发送至 <strong id="mpayPhoneDisplay" style="color:var(--text-primary);"></strong>, 请查收短信
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="mpayCode">
+                        <i class="fas fa-key"></i> 短信验证码
+                    </label>
+                    <input type="text" class="form-input" id="mpayCode" maxlength="8"
+                           placeholder="输入收到的短信验证码" inputmode="numeric"
+                           style="font-size:15px;letter-spacing:2px;">
+                </div>
+            </div>
+
+            <!-- 步骤3b: 上行短信提示 (upstream 模式) -->
+            <div id="mpayUpstreamStep" style="display:none;">
+                <div style="padding:12px;background:rgba(210,153,34,0.08);border:1px solid var(--color-warning);border-radius:var(--radius-md);margin-bottom:16px;">
+                    <div style="font-size:13px;color:var(--color-warning);font-weight:600;margin-bottom:6px;">
+                        <i class="fas fa-exclamation-triangle"></i> 上行短信验证
+                    </div>
+                    <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+                        请用手机 <strong id="mpayUpstreamPhone" style="color:var(--text-primary);"></strong>
+                        编辑短信, 内容为 <strong id="mpayUpstreamContent" style="color:var(--color-primary);"></strong>,
+                        发送到 <strong id="mpayUpstreamNumber" style="color:var(--color-primary);"></strong>
+                    </div>
+                    <div id="mpayUpstreamTips" style="font-size:11px;color:var(--text-tertiary);margin-top:6px;"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="mpayUpContent">
+                        <i class="fas fa-check"></i> 发送完成后, 在此确认 (可修改上行内容)
+                    </label>
+                    <input type="text" class="form-input" id="mpayUpContent"
+                           placeholder="通常为: 手机登录"
+                           style="font-size:13px;">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-modal-close>取消</button>
+            <button class="btn btn-primary" id="mpaySendSmsBtn" type="button" style="display:none;">
+                <i class="fas fa-paper-plane"></i> 发送验证码
+            </button>
+            <button class="btn btn-primary" id="mpayVerifyBtn" type="button" style="display:none;">
+                <i class="fas fa-check"></i> 确认登录
             </button>
         </div>
     </div>

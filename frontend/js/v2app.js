@@ -129,6 +129,14 @@
         wsManuallyClosed: false,      // 是否主动关闭 (登出/401), 主动关闭时不自动重连
         theme: 'dark',
         botConfigDirty: false,        // 机器人配置表单是否有未保存的修改
+        // -- MPay 手机号登录会话状态 --
+        mpay: {
+            step: "device",          // 当前步骤: device / phone / code / upstream
+            deviceId: "",             // 注册成功后的 device_id
+            phone: "",                // 当前手机号
+            mode: "",                 // normal / upstream
+            inProgress: false,        // 是否正在执行某个异步操作 (防重复提交)
+        },
     };
 
     /* ======================================================================
@@ -4180,6 +4188,304 @@
         }
     }
 
+    /* ======================================================================
+       19b. MPay 手机号登录 (网易官方 API, 免费)
+       流程: 注册设备 -> 输入手机号 -> 发送短信 -> (normal 输入验证码 /
+              upstream 上行短信) -> 验证登录 -> 自动添加账号
+       ====================================================================== */
+
+    /** MPay 设备注册中的原始 loading UI (用于失败重试时恢复) */
+    const MPAY_DEVICE_LOADING_HTML = `
+        <i class="fas fa-spinner fa-spin" style="font-size:24px;color:var(--color-primary);"></i>
+        <div style="font-size:13px;color:var(--text-secondary);margin-top:12px;">正在注册设备...</div>
+        <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">这是自动步骤, 无需操作</div>`;
+
+    /** 重置 MPay 登录状态并恢复 modal 初始 UI */
+    function resetMpayLoginState() {
+        state.mpay.step = "device";
+        state.mpay.deviceId = "";
+        state.mpay.phone = "";
+        state.mpay.mode = "";
+        state.mpay.inProgress = false;
+
+        // 恢复设备注册 loading 区原始内容
+        $("mpayDeviceLoading").innerHTML = MPAY_DEVICE_LOADING_HTML;
+
+        // 隐藏所有步骤内容
+        $("mpayDeviceLoading").style.display = "none";
+        $("mpayPhoneStep").style.display = "none";
+        $("mpayCodeStep").style.display = "none";
+        $("mpayUpstreamStep").style.display = "none";
+
+        // 隐藏所有底部操作按钮
+        $("mpaySendSmsBtn").style.display = "none";
+        $("mpayVerifyBtn").style.display = "none";
+        $("mpayVerifyBtn").disabled = false;
+        $("mpaySendSmsBtn").disabled = false;
+        $("mpayVerifyBtn").innerHTML = '<i class="fas fa-check"></i> 确认登录';
+        $("mpaySendSmsBtn").innerHTML = '<i class="fas fa-paper-plane"></i> 发送验证码';
+
+        // 清空输入
+        $("mpayPhone").value = "";
+        $("mpayCode").value = "";
+        $("mpayUpContent").value = "";
+
+        mpayUpdateSteps("device");
+    }
+
+    /** 更新步骤指示器高亮状态
+     * @param {string} currentStep - device / phone / code / upstream
+     */
+    function mpayUpdateSteps(currentStep) {
+        const stepEls = [$("mpayStep1"), $("mpayStep2"), $("mpayStep3")];
+        // code 与 upstream 都属于第 3 步
+        const currentIdx = (currentStep === "code" || currentStep === "upstream") ? 2
+                         : currentStep === "phone" ? 1
+                         : 0;
+        stepEls.forEach((el, i) => {
+            if (!el) return;
+            el.classList.remove("active", "done");
+            if (i < currentIdx) el.classList.add("done");
+            else if (i === currentIdx) el.classList.add("active");
+        });
+    }
+
+    /** 打开 MPay 登录弹窗并自动注册设备 */
+    async function openMpayLoginModal() {
+        resetMpayLoginState();
+        openModal("modalMpayLogin");
+        // 自动调用设备注册
+        await mpayRegisterDevice();
+    }
+
+    /** 步骤1: 注册 MPay 设备 (自动, 不需要用户输入) */
+    async function mpayRegisterDevice() {
+        state.mpay.step = "device";
+        state.mpay.inProgress = true;
+        $("mpayDeviceLoading").innerHTML = MPAY_DEVICE_LOADING_HTML;
+        $("mpayDeviceLoading").style.display = "block";
+        $("mpayPhoneStep").style.display = "none";
+        $("mpayCodeStep").style.display = "none";
+        $("mpayUpstreamStep").style.display = "none";
+        $("mpaySendSmsBtn").style.display = "none";
+        $("mpayVerifyBtn").style.display = "none";
+        mpayUpdateSteps("device");
+
+        try {
+            const res = await api("/api/accounts/mpay/device", { method: "POST" });
+            if (res && res.success) {
+                state.mpay.deviceId = (res.data && res.data.device_id) || "";
+                toastSuccess(res.message || "设备注册成功");
+                mpayShowPhoneStep();
+            } else {
+                const msg = (res && (res.message || res.error)) || "设备注册失败";
+                toastError(msg);
+                mpayShowDeviceError(msg);
+            }
+        } catch (e) {
+            const msg = (e && e.message) || "设备注册失败";
+            mpayShowDeviceError(msg);
+        } finally {
+            state.mpay.inProgress = false;
+        }
+    }
+
+    /** 在设备注册区显示错误信息与重试按钮 */
+    function mpayShowDeviceError(msg) {
+        $("mpayDeviceLoading").innerHTML = `
+            <i class="fas fa-exclamation-circle" style="font-size:24px;color:var(--color-danger);"></i>
+            <div style="font-size:13px;color:var(--color-danger);margin-top:12px;word-break:break-word;">${escapeHtml(msg)}</div>
+            <button class="btn btn-secondary" id="mpayRetryDeviceBtn" style="margin-top:12px;">
+                <i class="fas fa-redo"></i> 重试
+            </button>`;
+        const retryBtn = $("mpayRetryDeviceBtn");
+        if (retryBtn) retryBtn.addEventListener("click", mpayRegisterDevice);
+    }
+
+    /** 切换到手机号输入步骤 */
+    function mpayShowPhoneStep() {
+        state.mpay.step = "phone";
+        $("mpayDeviceLoading").style.display = "none";
+        $("mpayPhoneStep").style.display = "block";
+        $("mpayCodeStep").style.display = "none";
+        $("mpayUpstreamStep").style.display = "none";
+        $("mpaySendSmsBtn").style.display = "inline-flex";
+        $("mpayVerifyBtn").style.display = "none";
+        mpayUpdateSteps("phone");
+        const phoneInput = $("mpayPhone");
+        if (phoneInput) phoneInput.focus();
+    }
+
+    /** 步骤2: 发送短信验证码 */
+    async function handleMpaySendSms() {
+        if (state.mpay.inProgress) return;
+        const phone = $("mpayPhone").value.trim();
+        if (!phone) {
+            toastError("请输入手机号");
+            return;
+        }
+        if (!/^1\d{10}$/.test(phone)) {
+            toastError("手机号格式不正确, 请输入 11 位手机号");
+            return;
+        }
+        state.mpay.phone = phone;
+        state.mpay.inProgress = true;
+
+        const btn = $("mpaySendSmsBtn");
+        const oldHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 发送中...';
+
+        try {
+            const res = await api("/api/accounts/mpay/send-sms", {
+                method: "POST",
+                body: { phone: phone },
+            });
+            if (res && res.success) {
+                const data = res.data || {};
+                state.mpay.mode = data.mode || "normal";
+                if (state.mpay.mode === "upstream") {
+                    mpayShowUpstreamStep(data);
+                } else {
+                    mpayShowCodeStep();
+                }
+                toastSuccess(res.message || "验证码已发送");
+            } else {
+                const msg = (res && (res.message || res.error)) || "发送短信失败";
+                toastError(msg);
+            }
+        } catch (e) {
+            toastError((e && e.message) || "发送短信失败");
+        } finally {
+            state.mpay.inProgress = false;
+            btn.disabled = false;
+            btn.innerHTML = oldHtml;
+        }
+    }
+
+    /** 切换到验证码输入步骤 (normal 模式) */
+    function mpayShowCodeStep() {
+        state.mpay.step = "code";
+        $("mpayDeviceLoading").style.display = "none";
+        $("mpayPhoneStep").style.display = "none";
+        $("mpayCodeStep").style.display = "block";
+        $("mpayUpstreamStep").style.display = "none";
+        $("mpaySendSmsBtn").style.display = "none";
+        $("mpayVerifyBtn").style.display = "inline-flex";
+        $("mpayPhoneDisplay").textContent = maskPhone(state.mpay.phone);
+        mpayUpdateSteps("code");
+        const codeInput = $("mpayCode");
+        if (codeInput) codeInput.focus();
+    }
+
+    /** 切换到上行短信提示步骤 (upstream 模式) */
+    function mpayShowUpstreamStep(data) {
+        state.mpay.step = "upstream";
+        $("mpayDeviceLoading").style.display = "none";
+        $("mpayPhoneStep").style.display = "none";
+        $("mpayCodeStep").style.display = "none";
+        $("mpayUpstreamStep").style.display = "block";
+        $("mpaySendSmsBtn").style.display = "none";
+        $("mpayVerifyBtn").style.display = "inline-flex";
+        // 填充上行短信信息
+        $("mpayUpstreamPhone").textContent = maskPhone(state.mpay.phone);
+        $("mpayUpstreamContent").textContent = data.content || "手机登录";
+        $("mpayUpstreamNumber").textContent = data.number || "见短信提示";
+        $("mpayUpstreamTips").textContent = data.tips || "";
+        // 默认填充 up_content (便于直接确认)
+        const upInput = $("mpayUpContent");
+        if (upInput && !upInput.value.trim()) upInput.value = data.content || "手机登录";
+        mpayUpdateSteps("upstream");
+    }
+
+    /** 步骤3: 验证短信并完成登录 */
+    async function handleMpayVerify() {
+        if (state.mpay.inProgress) return;
+        const phone = state.mpay.phone;
+        if (!phone) {
+            toastError("手机号丢失, 请重新输入");
+            mpayShowPhoneStep();
+            return;
+        }
+
+        const mode = state.mpay.mode;
+        let code = "";
+        let upContent = "";
+        if (mode === "upstream") {
+            upContent = $("mpayUpContent").value.trim();
+            if (!upContent) {
+                toastError("请输入上行短信内容");
+                return;
+            }
+        } else {
+            code = $("mpayCode").value.trim();
+            if (!code) {
+                toastError("请输入收到的短信验证码");
+                return;
+            }
+        }
+
+        state.mpay.inProgress = true;
+        const btn = $("mpayVerifyBtn");
+        const oldHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 登录中...';
+
+        try {
+            const res = await api("/api/accounts/mpay/verify", {
+                method: "POST",
+                body: {
+                    phone: phone,
+                    code: code,
+                    up_content: upContent,
+                },
+            });
+            if (res && res.success) {
+                const data = res.data || {};
+                const nickname = data.nickname || "";
+                const userId = data.user_id || "";
+                toastSuccess(res.message || "登录成功! 账号已添加");
+                closeModal("modalMpayLogin");
+                resetMpayLoginState();
+                // 成功后刷新账号列表
+                await refreshAccountsAfterMpay();
+                // 提示账号信息
+                if (nickname || userId) {
+                    setTimeout(() => {
+                        toastInfo(`已添加账号: ${nickname || "未知"}${userId ? " (UID: " + userId + ")" : ""}`);
+                    }, 600);
+                }
+            } else {
+                const msg = (res && (res.message || res.error)) || "验证失败";
+                toastError(msg);
+            }
+        } catch (e) {
+            toastError((e && e.message) || "验证失败");
+        } finally {
+            state.mpay.inProgress = false;
+            btn.disabled = false;
+            btn.innerHTML = oldHtml;
+        }
+    }
+
+    /** MPay 登录成功后刷新账号列表 (Cookie 池 + 机器人列表) */
+    async function refreshAccountsAfterMpay() {
+        try {
+            // 刷新 Cookie 池 (创建机器人页面使用)
+            await loadCookiePoolAccounts();
+        } catch (_) { /* 忽略 */ }
+        // 如果当前在机器人列表页, 刷新列表
+        if (state.currentView === "bots") {
+            try { await loadBots(); } catch (_) { /* 忽略 */ }
+        }
+    }
+
+    /** 手机号脱敏: 138****1234 */
+    function maskPhone(phone) {
+        if (!phone || phone.length < 7) return phone || "";
+        return phone.slice(0, 3) + "****" + phone.slice(-4);
+    }
+
     /** 替换卡密 */
     async function handleReplaceKey() {
         const oldKey = $("replaceKeyOld").value.trim();
@@ -4378,6 +4684,24 @@
         $("createBotCaptchaImg") && $("createBotCaptchaImg").addEventListener("click", fetchCreateBotCaptcha);
         $("manualAuth4399") && $("manualAuth4399").addEventListener("change", toggleManualAuthType);
         $("manualAuthCookie") && $("manualAuthCookie").addEventListener("change", toggleManualAuthType);
+
+        // ---- MPay 手机号登录 ----
+        const btnMpayLogin = $("btnMpayLogin");
+        if (btnMpayLogin) btnMpayLogin.addEventListener("click", openMpayLoginModal);
+        const mpaySendSmsBtn = $("mpaySendSmsBtn");
+        if (mpaySendSmsBtn) mpaySendSmsBtn.addEventListener("click", handleMpaySendSms);
+        const mpayVerifyBtn = $("mpayVerifyBtn");
+        if (mpayVerifyBtn) mpayVerifyBtn.addEventListener("click", handleMpayVerify);
+        // 手机号输入框: 回车直接发送验证码
+        const mpayPhoneInput = $("mpayPhone");
+        if (mpayPhoneInput) mpayPhoneInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); handleMpaySendSms(); }
+        });
+        // 验证码输入框: 回车直接确认登录
+        const mpayCodeInput = $("mpayCode");
+        if (mpayCodeInput) mpayCodeInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); handleMpayVerify(); }
+        });
 
         // ---- 替换Key ----
         $("btnReplaceKey").addEventListener("click", () => {
