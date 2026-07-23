@@ -345,10 +345,14 @@ class NeteaseDirectClient:
         pc_inner = self._convert_sauth_to_pc(inner_sauth)
         if pc_inner != inner_sauth:
             logger.info("sauth_json 已从 PE 格式转换为 PC 格式")
-            inner_sauth = pc_inner
-            sauth_json = json.dumps(
-                {"sauth_json": pc_inner}, ensure_ascii=False
-            )
+        inner_sauth = pc_inner
+        # 始终重新包装为完整的 {"sauth_json":"<inner>"} 格式
+        # (修复 BUG: 之前仅在 PE→PC 转换发生时才重新包装,
+        #  导致已经是 PC 格式的 sauth_json 被以裸 inner JSON 发送给
+        #  login-otp, 服务器返回 code=4 "参数为空")
+        sauth_json = json.dumps(
+            {"sauth_json": pc_inner}, ensure_ascii=False
+        )
 
         # 为该账号生成独立的设备指纹 (SA_DATA)
         # 参考源 (Drug.NetEase x19Auth.cs): sa_data.udid 是设备硬件指纹,
