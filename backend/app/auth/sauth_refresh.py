@@ -223,14 +223,39 @@ class SauthRefresher:
                 )
                 return None
 
-            # 使用 build_sauth_json 显式构建 sauth_json (与 Login4399OAuth2
-            # 内部一致, 此处显式调用以明确依赖)。
+            # Step 1: 使用 build_sauth_json 构建 4399com 频道 sauth_json
+            # (此频道已可能被网易废弃, 返回 code=32)
             sauth_dict = build_sauth_json(result.uid, result.sessionid)
-            # 包装成 {"sauth_json": "<json>"} 格式 (与 generate_sauth_json 一致)
-            sauth_str = json.dumps(
-                {"sauth_json": json.dumps(sauth_dict, ensure_ascii=False)},
-                ensure_ascii=False,
+
+            # Step 2: 通过 fever_to_sauth 转换为 netease 频道 sauth_json
+            # 4399com 频道的 sauth_json 在 /login-otp 认证时返回 code=32,
+            # 需要通过 MPay create_ticket + login/ticket 流程换取
+            # netease 频道的新 sessionid, 才能通过网易认证。
+            from ..netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
+
+            deviceid = sauth_dict.get("deviceid", "") or "4399FuckYou"
+            convert_result = await _fever_to_sauth(
+                sdkuid=result.uid,
+                sessionid=result.sessionid,
+                deviceid=deviceid,
             )
+
+            if convert_result.get("success"):
+                sauth_str = convert_result["sauth_json"]
+                logger.info(
+                    f"fever_to_sauth 转换成功 (账号: {account_username}), "
+                    f"已转换为 netease 频道"
+                )
+            else:
+                # 转换失败, 回退到 4399com 频道 (可能 code=32)
+                sauth_str = json.dumps(
+                    {"sauth_json": json.dumps(sauth_dict, ensure_ascii=False)},
+                    ensure_ascii=False,
+                )
+                logger.warning(
+                    f"fever_to_sauth 转换失败: {convert_result.get('message', '')}, "
+                    f"回退到 4399com 频道 (可能遇到 code=32)"
+                )
 
             # 更新账号记录: uid / sauth_json / last_refresh_at, 恢复 active
             account = await db.get_sauth_account_by_username(account_username)
