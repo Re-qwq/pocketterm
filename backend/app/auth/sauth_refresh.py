@@ -516,43 +516,130 @@ class SauthRefresher:
                     state_match.group(1) if state_match else ""
                 )
 
+                # 初始化 MPay token 变量
+                mpay_token: str = ""
+                mpay_sdkuid: str = ""
+
                 if not sig:
                     self._last_refresh_debug["mpay_flow"]["check_cookie"] = (
-                        "no_sig"
+                        "no_sig_trying_alternatives"
                     )
-                    return None, ""
+
+                    # 替代方案: checkKidLoginUserCookie 返回 JS 页面,
+                    # 无法获取 sig。尝试用已有 cookies 直接调用 sdk/info。
+
+                    # 从 Pauth cookie 提取 uid
+                    pauth = client.cookies.get("Pauth", "")
+                    pauth_parts = pauth.split("|") if pauth else []
+                    ck_uid = pauth_parts[0] if len(pauth_parts) > 0 else ""
+                    pauth_token = pauth_parts[2] if len(pauth_parts) > 2 else ""
+                    self._last_refresh_debug["mpay_flow"]["pauth_uid"] = ck_uid
+                    self._last_refresh_debug["mpay_flow"]["pauth_token_len"] = (
+                        len(pauth_token)
+                    )
+
+                    # 方案 1: 直接用 cookies 调用 sdk/info (无 sig)
+                    try:
+                        alt_query = _SDK_QUERY.format(
+                            game_id="500352",
+                            sig="",
+                            uid=ck_uid,
+                            time="",
+                            validateState="",
+                            username=username,
+                        )
+                        alt_sdk_url = (
+                            f"{SDK_INFO_URL}?callback=&queryStr={alt_query}"
+                        )
+                        resp_alt = await client.get(alt_sdk_url)
+                        alt_text = resp_alt.text.strip()
+                        if alt_text.startswith("(") and alt_text.endswith(")"):
+                            alt_text = alt_text[1:-1]
+                        elif "(" in alt_text and alt_text.endswith(")"):
+                            inner_start = alt_text.find("(")
+                            if inner_start != -1:
+                                alt_text = alt_text[inner_start + 1:-1]
+                        alt_data = json.loads(alt_text) if alt_text else {}
+                        alt_login_data = alt_data.get("sdk_login_data", {})
+                        alt_token = alt_login_data.get("token", "")
+                        self._last_refresh_debug["mpay_flow"]["alt_sdk_resp"] = (
+                            str(alt_data)[:300]
+                        )
+                        if alt_token:
+                            mpay_token = alt_token
+                            mpay_sdkuid = alt_login_data.get("sdkuid", ck_uid)
+                            self._last_refresh_debug["mpay_flow"]["alt"] = (
+                                "sdk_info_direct"
+                            )
+                    except Exception as alt_e:
+                        self._last_refresh_debug["mpay_flow"]["alt_sdk_err"] = (
+                            str(alt_e)
+                        )
+
+                    # 方案 2: 用 Pauth token 直接尝试 fever_to_sauth
+                    if not mpay_token and pauth_token:
+                        self._last_refresh_debug["mpay_flow"]["alt"] = (
+                            "pauth_token_direct"
+                        )
+                        try:
+                            convert_result = await _fever_to_sauth(
+                                sdkuid=ck_uid,
+                                sessionid=pauth_token,
+                                deviceid=deviceid,
+                            )
+                            if convert_result.get("success"):
+                                sauth_json_str = convert_result["sauth_json"]
+                                self._last_refresh_debug["mpay_flow"][
+                                    "fever_result"
+                                ] = "success_via_pauth"
+                                logger.info(
+                                    "通过 Pauth token 直接转换 sauth 成功"
+                                )
+                                return sauth_json_str, ck_uid
+                            else:
+                                self._last_refresh_debug["mpay_flow"][
+                                    "fever_result"
+                                ] = convert_result.get("message", "")[:200]
+                        except Exception as ft_e:
+                            self._last_refresh_debug["mpay_flow"][
+                                "fever_err"
+                            ] = str(ft_e)
+
+                    if not mpay_token:
+                        return None, ""
 
                 self._last_refresh_debug["mpay_flow"]["check_cookie"] = "ok"
                 self._last_refresh_debug["mpay_flow"]["uid"] = ck_uid
 
-                # Step 6: sdk/info → MPay SDK token
-                query_str = _SDK_QUERY.format(
-                    game_id="500352",
-                    sig=sig,
-                    uid=ck_uid,
-                    time=login_time,
-                    validateState=validate_state,
-                    username=username,
-                )
-                sdk_url = f"{SDK_INFO_URL}?callback=&queryStr={query_str}"
-                resp3 = await client.get(sdk_url)
-                sdk_text = resp3.text.strip()
+                # Step 6: sdk/info → MPay SDK token (仅当未从替代方案获取时)
+                if not mpay_token:
+                    query_str = _SDK_QUERY.format(
+                        game_id="500352",
+                        sig=sig,
+                        uid=ck_uid,
+                        time=login_time,
+                        validateState=validate_state,
+                        username=username,
+                    )
+                    sdk_url = f"{SDK_INFO_URL}?callback=&queryStr={query_str}"
+                    resp3 = await client.get(sdk_url)
+                    sdk_text = resp3.text.strip()
 
-                # 去除 JSONP 包裹
-                if sdk_text.startswith("(") and sdk_text.endswith(")"):
-                    sdk_text = sdk_text[1:-1]
-                elif "(" in sdk_text and sdk_text.endswith(")"):
-                    inner_start = sdk_text.find("(")
-                    if inner_start != -1:
-                        sdk_text = sdk_text[inner_start + 1 : -1]
+                    # 去除 JSONP 包裹
+                    if sdk_text.startswith("(") and sdk_text.endswith(")"):
+                        sdk_text = sdk_text[1:-1]
+                    elif "(" in sdk_text and sdk_text.endswith(")"):
+                        inner_start = sdk_text.find("(")
+                        if inner_start != -1:
+                            sdk_text = sdk_text[inner_start + 1 : -1]
 
-                sdk_data = json.loads(sdk_text) if sdk_text else {}
-                sdk_login_data = sdk_data.get("sdk_login_data", {})
-                mpay_token = sdk_login_data.get("token", "")
-                mpay_sdkuid = sdk_login_data.get("sdkuid", ck_uid)
+                    sdk_data = json.loads(sdk_text) if sdk_text else {}
+                    sdk_login_data = sdk_data.get("sdk_login_data", {})
+                    mpay_token = sdk_login_data.get("token", "")
+                    mpay_sdkuid = sdk_login_data.get("sdkuid", ck_uid)
 
-                self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
-                self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
+                    self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
+                    self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
 
         except Exception as e:
             self._last_refresh_debug["mpay_flow"]["status"] = "exception"
