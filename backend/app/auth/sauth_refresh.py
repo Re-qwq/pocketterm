@@ -319,7 +319,6 @@ class SauthRefresher:
             SDK_INFO_URL,
         )
         from .netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
-        from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
 
         _AES_PASSPHRASE = "lzYW5qaXVqa"
 
@@ -594,33 +593,83 @@ class SauthRefresher:
             logger.warning("未获取到 MPay token")
             return None, ""
 
-        # Step 7: fever_to_sauth → netease 频道
-        self._last_refresh_debug["mpay_flow"]["deviceid"] = deviceid
+        # Step 7: 构建 4399pc sauth_json + uni_sauth 验证 (参考 account_register.py)
+        # 不使用 fever_to_sauth (MPay create_ticket 返回 1003 错误)
+        # 而是直接用 sdk_login_data 的 token 构建 4399pc 频道 sauth_json,
+        # 然后通过 uni_sauth 验证
+        import secrets as _secrets
+        import string as _string
 
+        _UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
+
+        # 生成设备指纹 (32位大写HEX, 与 account_register.py 一致)
+        _hex_chars = "0123456789ABCDEF"
+        device_fp_udid = "".join(_secrets.choice(_hex_chars) for _ in range(32))
+        device_fp_sn = "".join(_secrets.choice(_hex_chars) for _ in range(32))
+
+        sauth_inner = {
+            "aim_info": '{"aim":"127.0.0.1","country":"CN","tz":"+0800","tzid":""}',
+            "app_channel": "4399pc",
+            "client_login_sn": device_fp_sn,
+            "deviceid": device_fp_udid,
+            "gameid": "x19",
+            "gas_token": "",
+            "ip": "127.0.0.1",
+            "login_channel": "4399pc",
+            "platform": "pc",
+            "realname": '{"realname_type":"0"}',
+            "sdk_version": "1.0.0",
+            "sdkuid": mpay_sdkuid,
+            "sessionid": mpay_token,
+            "source_platform": "pc",
+            "timestamp": rand_time,
+            "udid": device_fp_udid,
+            "userid": username.lower(),
+        }
+        sauth_inner_str = json.dumps(sauth_inner, ensure_ascii=False)
+        sauth_wrapped = json.dumps({"sauth_json": sauth_inner_str}, ensure_ascii=False)
+
+        self._last_refresh_debug["mpay_flow"]["deviceid"] = device_fp_udid
+        self._last_refresh_debug["mpay_flow"]["sauth_channel"] = "4399pc"
+
+        # 调用 uni_sauth 验证 sauth_json
         try:
-            convert_result = await _fever_to_sauth(
-                sdkuid=mpay_sdkuid,
-                sessionid=mpay_token,
-                deviceid=deviceid,
-            )
-            if convert_result.get("success"):
+            uni_headers = {
+                "User-Agent": "WPFLauncher/0.0.0.0",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=15) as uni_client:
+                uni_resp = await uni_client.post(
+                    _UNI_SAUTH_URL,
+                    content=sauth_inner_str.encode("utf-8"),
+                    headers=uni_headers,
+                )
+                try:
+                    uni_data = uni_resp.json()
+                except Exception:
+                    uni_data = {}
+
+                uni_code = uni_data.get("code", -1)
+                self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = uni_code
+                self._last_refresh_debug["mpay_flow"]["uni_sauth_msg"] = uni_data.get("message", "")[:200]
+
+                if uni_code != 0:
+                    logger.warning(
+                        f"uni_sauth 失败: code={uni_code}, "
+                        f"msg={uni_data.get('message', '')}"
+                    )
+                    self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "uni_sauth_failed"
+                    return None, ""
+
                 logger.info(
-                    f"fever_to_sauth 转换成功, "
-                    f"已切换到 netease 频道 (账号: {username})"
+                    f"uni_sauth 验证成功 (4399pc 频道, 账号: {username})"
                 )
-                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "success"
-                self._last_refresh_debug["final_channel"] = "netease"
-                return convert_result["sauth_json"], mpay_sdkuid
-            else:
-                logger.warning(
-                    f"fever_to_sauth 转换失败: "
-                    f"{convert_result.get('message', '')}"
-                )
-                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "failed"
-                self._last_refresh_debug["mpay_flow"]["fever_error"] = convert_result.get("message", "")
-                return None, ""
+                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "uni_sauth_ok"
+                self._last_refresh_debug["final_channel"] = "4399pc"
+                return sauth_wrapped, mpay_sdkuid
+
         except Exception as convert_err:
-            logger.warning(f"fever_to_sauth 异常: {convert_err}")
+            logger.warning(f"uni_sauth 异常: {convert_err}")
             self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "exception"
             self._last_refresh_debug["mpay_flow"]["fever_error"] = str(convert_err)
             return None, ""
