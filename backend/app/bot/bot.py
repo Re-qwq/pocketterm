@@ -406,8 +406,10 @@ class PocketBot:
             from app.database import get_db
             db = await get_db()
             await db.update_bot_status(self.bot_id, db_status, error)
-        except Exception:
-            pass
+            print(f"  [DEBUG] DB更新: status={db_status}, error={error[:100] if error else '(empty)'}, bot_id={self.bot_id}", flush=True)
+        except Exception as e:
+            print(f"  [DEBUG] DB更新失败: {e}", flush=True)
+            logger.warning(f"数据库状态更新失败: {e}")
 
     def _log_op(self, icon: str, message: str, color: str = Colors.CYAN) -> None:
         """打印游戏操作日志（带图标和颜色）。
@@ -822,6 +824,7 @@ class PocketBot:
 
             except ConnectionError as e:
                 error_msg = f"连接断开: {e}"
+                print(f"  [DEBUG] _run_loop ConnectionError: e={e!r}, error_msg={error_msg!r}", flush=True)
                 self._set_status(BotStatus.ERROR, error_msg)
                 print(
                     f"\n{Colors.MAGENTA}{Colors.BOLD}  连接断开{Colors.RESET}\n"
@@ -834,6 +837,7 @@ class PocketBot:
 
             except Exception as e:
                 error_msg = f"未知错误: {type(e).__name__}: {e}"
+                print(f"  [DEBUG] _run_loop 未知异常: type={type(e).__name__}, e={e!r}, error_msg={error_msg!r}", flush=True)
                 self._set_status(BotStatus.ERROR, error_msg)
                 logger.exception(f"机器人 {self.name} 发生异常")
                 print(f"\n{Colors.RED}{Colors.BOLD}  未处理异常{Colors.RESET}", flush=True)
@@ -1117,6 +1121,7 @@ class PocketBot:
         ):
             # 接入点启动失败 (如缺少 server_code、找不到 Go 二进制等)
             err_msg = self._access_point.info.last_error or "接入点启动失败"
+            print(f"  [DEBUG] 接入点启动失败: start_ok={start_ok}, status={self._access_point.info.status}, err_msg={err_msg!r}", flush=True)
             self._set_status(BotStatus.ERROR, err_msg)
             raise ConnectionError(err_msg)
         print(f"  {Colors.GREEN}接入点已启动{Colors.RESET}", flush=True)
