@@ -78,7 +78,17 @@ def get_current_user(request: Request) -> Dict[str, Any]:
         )
 
     config = get_config()
+    # 先用旧版 JWT 密钥验证
     payload = verify_token(token, config.jwt_secret)
+    
+    # 旧版验证失败,尝试用 v2 JWT 密钥验证
+    if payload is None:
+        try:
+            from ..security import verify_jwt_token
+            payload = verify_jwt_token(token)
+        except Exception:
+            payload = None
+    
     if payload is None:
         logger.warning("认证失败: JWT 验证失败或已过期")
         raise HTTPException(
