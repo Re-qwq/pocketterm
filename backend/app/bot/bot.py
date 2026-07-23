@@ -50,6 +50,7 @@ from typing import Any, Callable, Optional
 
 from ..access_point.base import (
     AccessPoint,
+    AccessPointStatus,
     AccountBannedError,
     Colors,
     InvalidCredentialsError,
@@ -1047,6 +1048,7 @@ class PocketBot:
             AccessPointType.NEOMEGA: "neomega",
             AccessPointType.FATEARK: "fateark",
             AccessPointType.CUSTOM: "custom",
+            AccessPointType.PUREPYTHON: "purepython",
         }
         ap_type_name = ap_type_map.get(
             self.config.access_point_type, "custom"
@@ -1107,7 +1109,12 @@ class PocketBot:
         # 启动接入点
         print(f"  {Colors.CYAN}启动接入点...{Colors.RESET}", flush=True)
         start_ok = await self._access_point.start()
-        if not start_ok:
+        # CustomAccessPoint 返回 bool; PurePythonAccessPoint 返回 None
+        # 对于 None, 通过检查 status 判断是否成功
+        if start_ok is False or (
+            start_ok is None
+            and self._access_point.info.status == AccessPointStatus.CRASHED
+        ):
             # 接入点启动失败 (如缺少 server_code、找不到 Go 二进制等)
             err_msg = self._access_point.info.last_error or "接入点启动失败"
             self._set_status(BotStatus.ERROR, err_msg)

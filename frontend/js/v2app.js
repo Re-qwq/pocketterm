@@ -1465,11 +1465,19 @@
         const startBtn = $("btnStartBot");
         const stopBtn = $("btnStopBot");
         const restartBtn = $("btnRestartBot");
-        if (state.panelBot && (state.panelBot.status === "running" || state.panelBot.status === "connected" || state.panelBot.status === "spawned" || state.panelBot.status === "starting" || state.panelBot.status === "connecting")) {
+        const botStatus = state.panelBot ? state.panelBot.status : null;
+        // 运行中/启动中: 显示停止+重启
+        if (botStatus && (botStatus === "running" || botStatus === "connected" || botStatus === "spawned" || botStatus === "starting" || botStatus === "connecting")) {
             startBtn.classList.add("hidden");
             stopBtn.classList.remove("hidden");
             restartBtn.classList.remove("hidden");
+        } else if (botStatus === "error") {
+            // 错误状态: 显示启动+停止 (允许停止重连尝试)
+            startBtn.classList.remove("hidden");
+            stopBtn.classList.remove("hidden");
+            restartBtn.classList.add("hidden");
         } else {
+            // 停止/未知: 仅显示启动
             startBtn.classList.remove("hidden");
             stopBtn.classList.add("hidden");
             restartBtn.classList.add("hidden");
@@ -1747,8 +1755,20 @@
                         const displayStatus = statusMap[data.status] || data.status;
                         if (state.panelBot) {
                             state.panelBot.status = displayStatus;
+                            // 保存最近错误信息
+                            if (data.last_error) {
+                                state.panelBot.last_error = data.last_error;
+                            }
                         }
-                        appendTerminal(`机器人状态更新: ${displayStatus}`, "info");
+                        // 错误状态特殊处理: 显示更详细的信息
+                        if (displayStatus === "error") {
+                            const errMsg = data.last_error || state.panelBot?.last_error || "未知错误";
+                            appendTerminal(`机器人状态更新: 错误 (${errMsg})`, "error");
+                        } else if (displayStatus === "banned") {
+                            appendTerminal(`机器人状态更新: 已封禁`, "error");
+                        } else {
+                            appendTerminal(`机器人状态更新: ${displayStatus}`, "info");
+                        }
                         // 直接更新 UI 而非重新从 API 读取
                         updatePanelBotUI();
                     }
@@ -1889,7 +1909,9 @@
     /** 启动机器人 */
     async function startBot() {
         if (!ensureBotExists()) return;
+        const startBtn = $("btnStartBot");
         try {
+            startBtn.disabled = true;
             appendTerminal("正在启动机器人...", "system");
             const res = await api(`/bots/${state.currentBotId}/start`, { method: "POST" });
             if (res.success) {
@@ -1900,14 +1922,31 @@
                 $("btnStopBot").classList.remove("hidden");
                 $("btnRestartBot").classList.remove("hidden");
                 await loadPanelBot();
+            } else {
+                const errMsg = res.detail || res.message || "启动失败 (未知原因)";
+                appendTerminal(`启动失败: ${errMsg}`, "error");
+                toastError(errMsg);
+                // 更新 UI 显示错误状态
+                if (state.panelBot) state.panelBot.status = "error";
+                updatePanelBotUI();
             }
-        } catch (_) { /* 已处理 */ }
+        } catch (err) {
+            const errMsg = err?.message || err?.detail || "启动请求失败";
+            appendTerminal(`启动失败: ${errMsg}`, "error");
+            toastError(errMsg);
+            if (state.panelBot) state.panelBot.status = "error";
+            updatePanelBotUI();
+        } finally {
+            startBtn.disabled = false;
+        }
     }
 
     /** 停止机器人 */
     async function stopBot() {
         if (!ensureBotExists()) return;
+        const stopBtn = $("btnStopBot");
         try {
+            stopBtn.disabled = true;
             appendTerminal("正在停止机器人...", "system");
             const res = await api(`/bots/${state.currentBotId}/stop`, { method: "POST" });
             if (res.success) {
@@ -1918,22 +1957,44 @@
                 $("btnStopBot").classList.add("hidden");
                 $("btnRestartBot").classList.add("hidden");
                 await loadPanelBot();
+            } else {
+                const errMsg = res.detail || res.message || "停止失败";
+                appendTerminal(`停止失败: ${errMsg}`, "error");
+                toastError(errMsg);
             }
-        } catch (_) { /* 已处理 */ }
+        } catch (err) {
+            const errMsg = err?.message || err?.detail || "停止请求失败";
+            appendTerminal(`停止失败: ${errMsg}`, "error");
+            toastError(errMsg);
+        } finally {
+            stopBtn.disabled = false;
+        }
     }
 
     /** 重启机器人 */
     async function restartBot() {
         if (!ensureBotExists()) return;
+        const restartBtn = $("btnRestartBot");
         try {
+            restartBtn.disabled = true;
             appendTerminal("正在重启机器人...", "system");
             const res = await api(`/bots/${state.currentBotId}/restart`, { method: "POST" });
             if (res.success) {
                 appendTerminal("机器人重启成功", "success");
                 toastSuccess("机器人已重启");
                 await loadPanelBot();
+            } else {
+                const errMsg = res.detail || res.message || "重启失败";
+                appendTerminal(`重启失败: ${errMsg}`, "error");
+                toastError(errMsg);
             }
-        } catch (_) { /* 已处理 */ }
+        } catch (err) {
+            const errMsg = err?.message || err?.detail || "重启请求失败";
+            appendTerminal(`重启失败: ${errMsg}`, "error");
+            toastError(errMsg);
+        } finally {
+            restartBtn.disabled = false;
+        }
     }
 
     /** 检查是否存在机器人 */

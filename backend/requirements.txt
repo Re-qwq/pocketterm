@@ -14,4 +14,5 @@ pyyaml==6.0.2
 psutil==6.0.0
 pycryptodome==3.21.0
 pillow>=10.0.0
+ddddocr>=1.4.7
 

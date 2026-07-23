@@ -537,7 +537,7 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
         panel_id=panel_id,
         name=bot_name,
         account_id=account_id,
-        server_code="",
+        server_code=req.server_code or "",
         server_type="rental",
         access_point_type="purepython",
         config=json.dumps(config),
@@ -705,7 +705,9 @@ async def stop_bot(bot_id: str, request: Request):
 
     bot = await _get_bot_with_access(bot_id, user, db)
 
-    if bot["status"] not in ("running", "starting", "connecting"):
+    # 允许从 running/starting/connecting/error 状态停止
+    # (error 状态下可能仍有重连尝试在运行, 需要能停止)
+    if bot["status"] not in ("running", "starting", "connecting", "error"):
         raise HTTPException(status_code=400, detail="机器人未在运行")
 
     try:

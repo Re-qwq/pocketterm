@@ -25,8 +25,7 @@ backend/data/accounts.json
 backend/data/device_fingerprints.json
 config.local.yaml
 
-# Binary files
-access_point_go/pocketterm_ap
+# Binary files (pocketterm_ap 已提交到仓库, Docker 构建需要)
 access_point_go/pocketterm_ap.bak
 
 # IDE
