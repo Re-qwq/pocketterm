@@ -111,14 +111,61 @@ def _qq_avatar(email: str) -> str:
     return ""
 
 
+def _send_email_resend(to_email: str, subject: str, body: str) -> bool:
+    """通过 Resend HTTP API 发送邮件。
+
+    适用于 Railway 等 PaaS 平台 (阻止出站 SMTP 端口)。
+    需要环境变量 RESEND_API_KEY。
+    发件人默认 onboarding@resend.dev (免费层) 或 RESEND_FROM。
+
+    Resend 免费层: 3000 封/月, 无需域名验证即可使用 onboarding@resend.dev。
+    """
+    api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not api_key:
+        return False
+
+    sender = os.environ.get("RESEND_FROM", "PocketTerm <onboarding@resend.dev>").strip()
+
+    try:
+        import httpx
+
+        resp = httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": sender,
+                "to": [to_email],
+                "subject": subject,
+                "text": body,
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            logger.info("Resend 邮件发送成功: %s", to_email)
+            return True
+        logger.error(
+            "Resend 邮件发送失败: status=%s, body=%s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Resend 邮件发送异常 (%s): %s", to_email, exc)
+        return False
+
+
 def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
-    """通过 SMTP 发送邮件。
+    """通过 SMTP 发送邮件 (本地开发或非 Railway 部署使用)。
 
     SMTP 配置从环境变量读取::
 
         SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
 
-    若未配置 SMTP，仅记录日志并返回 False (验证码仍已入库，便于开发调试)。
+    注意: Railway 等 PaaS 平台会阻止出站 SMTP 端口 (25/465/587),
+    请改用 _send_email_resend (Resend HTTP API)。
     """
     host = os.environ.get("SMTP_HOST", "").strip()
     port = int(os.environ.get("SMTP_PORT", "465"))
@@ -163,6 +210,22 @@ def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.exception("邮件发送失败 (%s): %s", to_email, exc)
         return False
+
+
+def _send_email(to_email: str, subject: str, body: str) -> bool:
+    """发送邮件，优先使用 Resend HTTP API，回退到 SMTP。
+
+    发送优先级:
+        1. Resend HTTP API (RESEND_API_KEY) — 适用于 Railway 等阻止 SMTP 的平台
+        2. SMTP (SMTP_HOST/SMTP_USER/SMTP_PASS) — 适用于本地或 VPS 部署
+    """
+    # 1. 尝试 Resend API
+    if _send_email_resend(to_email, subject, body):
+        return True
+    # 2. 回退到 SMTP
+    if _send_email_smtp(to_email, subject, body):
+        return True
+    return False
 
 
 # ============================================================================
@@ -358,12 +421,27 @@ async def send_email_code(req: SendEmailCodeRequest, request: Request):
         f"验证码 5 分钟内有效，请勿泄露给他人。\n"
         f"如非本人操作，请忽略此邮件。"
     )
-    sent = _send_email_smtp(email, subject, body)
+    sent = _send_email(email, subject, body)
 
-    return {
-        "success": True,
-        "message": "验证码已发送" if sent else "验证码已生成 (未配置SMTP，请查看日志)",
-    }
+    if sent:
+        return {"success": True, "message": "验证码已发送"}
+
+    # 邮件发送失败 — 提供具体原因
+    has_resend = bool(os.environ.get("RESEND_API_KEY", "").strip())
+    has_smtp = bool(
+        os.environ.get("SMTP_HOST", "").strip()
+        and os.environ.get("SMTP_USER", "").strip()
+        and os.environ.get("SMTP_PASS", "").strip()
+    )
+    if not has_resend and not has_smtp:
+        msg = "邮件未配置 (需设置 RESEND_API_KEY 或 SMTP_HOST/USER/PASS)"
+    elif has_resend and not has_smtp:
+        msg = "Resend 发送失败，请检查 RESEND_API_KEY 是否有效"
+    elif not has_resend and has_smtp:
+        msg = "SMTP 发送失败 (Railway 阻止 SMTP 端口，请改用 RESEND_API_KEY)"
+    else:
+        msg = "邮件发送失败 (Resend 和 SMTP 均失败，请查看日志)"
+    return {"success": True, "message": f"验证码已生成 ({msg})"}
 
 
 @router.post("/email/verify")
