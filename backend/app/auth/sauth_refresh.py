@@ -224,37 +224,42 @@ class SauthRefresher:
                 return None
 
             # Step 1: 使用 build_sauth_json 构建 4399com 频道 sauth_json
-            # (此频道已可能被网易废弃, 返回 code=32)
             sauth_dict = build_sauth_json(result.uid, result.sessionid)
-
-            # Step 2: 通过 fever_to_sauth 转换为 netease 频道 sauth_json
-            # 4399com 频道的 sauth_json 在 /login-otp 认证时返回 code=32,
-            # 需要通过 MPay create_ticket + login/ticket 流程换取
-            # netease 频道的新 sessionid, 才能通过网易认证。
-            from ..netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
-
-            deviceid = sauth_dict.get("deviceid", "") or "4399FuckYou"
-            convert_result = await _fever_to_sauth(
-                sdkuid=result.uid,
-                sessionid=result.sessionid,
-                deviceid=deviceid,
+            sauth_str = json.dumps(
+                {"sauth_json": json.dumps(sauth_dict, ensure_ascii=False)},
+                ensure_ascii=False,
             )
 
-            if convert_result.get("success"):
-                sauth_str = convert_result["sauth_json"]
-                logger.info(
-                    f"fever_to_sauth 转换成功 (账号: {account_username}), "
-                    f"已转换为 netease 频道"
+            # Step 2: 尝试通过 fever_to_sauth 转换为 netease 频道 sauth_json
+            # 4399com 频道的 sauth_json 在 /login-otp 认证时可能返回 code=32,
+            # 需要通过 MPay create_ticket + login/ticket 流程换取
+            # netease 频道的新 sessionid, 才能通过网易认证。
+            # 注意: 此步骤失败不影响主流程, 回退到 4399com 频道。
+            try:
+                from ..netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
+
+                deviceid = sauth_dict.get("deviceid", "") or "4399FuckYou"
+                convert_result = await _fever_to_sauth(
+                    sdkuid=result.uid,
+                    sessionid=result.sessionid,
+                    deviceid=deviceid,
                 )
-            else:
-                # 转换失败, 回退到 4399com 频道 (可能 code=32)
-                sauth_str = json.dumps(
-                    {"sauth_json": json.dumps(sauth_dict, ensure_ascii=False)},
-                    ensure_ascii=False,
-                )
+
+                if convert_result.get("success"):
+                    sauth_str = convert_result["sauth_json"]
+                    logger.info(
+                        f"fever_to_sauth 转换成功 (账号: {account_username}), "
+                        f"已转换为 netease 频道"
+                    )
+                else:
+                    logger.warning(
+                        f"fever_to_sauth 转换失败: {convert_result.get('message', '')}, "
+                        f"回退到 4399com 频道 (可能遇到 code=32)"
+                    )
+            except Exception as convert_err:
                 logger.warning(
-                    f"fever_to_sauth 转换失败: {convert_result.get('message', '')}, "
-                    f"回退到 4399com 频道 (可能遇到 code=32)"
+                    f"fever_to_sauth 异常 (不影响刷新): {convert_err}, "
+                    f"回退到 4399com 频道"
                 )
 
             # 更新账号记录: uid / sauth_json / last_refresh_at, 恢复 active
