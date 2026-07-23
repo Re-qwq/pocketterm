@@ -306,6 +306,9 @@ class Database:
             await self._migrate_sauth_accounts_table()
             await self._migrate_users_v2_table()
 
+            # -- 初始化默认商店商品 (仅在表为空时插入) -------------------
+            await self._init_default_shop_products()
+
             self._initialized = True
             logger.info("数据库初始化完成: %s", self._db_path)
 
@@ -391,6 +394,41 @@ class Database:
                 )
                 logger.info("users 表迁移: 已添加 %s 列", col_name)
         await self.conn.commit()
+
+    async def _init_default_shop_products(self) -> None:
+        """初始化默认商店商品 (仅在 shop_products 表为空时插入)。
+
+        默认商品:
+            - 日卡面板 (5余额, 1天)
+            - 周卡面板 (16余额, 7天)
+            - 月卡面板 (35余额, 30天)
+            - 永久注册卡 (3余额, 永久)
+        """
+        import time as _time
+
+        count_row = await (await self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM shop_products"
+        )).fetchone()
+        if count_row and count_row["cnt"] > 0:
+            return  # 已有商品, 不重复插入
+
+        now = _time.time()
+        defaults = [
+            ("prod_panel_day",   "panel_card",    "日卡面板",   "面板日卡,有效期1天",       5.0,  1,    "panel"),
+            ("prod_panel_week",  "panel_card",    "周卡面板",   "面板周卡,有效期7天",       16.0, 7,    "panel"),
+            ("prod_panel_month", "panel_card",    "月卡面板",   "面板月卡,有效期30天",       35.0, 30,   "panel"),
+            ("prod_reg_perm",    "register_card", "永久注册卡", "永久可用注册卡密",           3.0,  None, "register"),
+        ]
+        for pid, cat, name, desc, price, days, ctype in defaults:
+            await self.conn.execute(
+                """INSERT OR IGNORE INTO shop_products
+                   (product_id, category, name, description, price,
+                    duration_days, card_type, file_path, status, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, '', 'active', 'system', ?)""",
+                (pid, cat, name, desc, price, days, ctype, now),
+            )
+        await self.conn.commit()
+        logger.info("已初始化 %d 个默认商店商品", len(defaults))
 
     @property
     def conn(self) -> aiosqlite.Connection:
