@@ -113,7 +113,7 @@ async def fever_to_sauth(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, verify=False) as client:
             resp = await client.post(MPAY_CREATE_TICKET_URL, data=create_data, headers=headers)
             # BUG-5.3 修复: 之前直接调用 resp.json() 未检查 HTTP 状态码,
             # 若服务端返回非 200 (如 5xx) 且响应体非 JSON, 会抛出未处理异常。
