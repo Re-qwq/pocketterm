@@ -288,111 +288,174 @@ class SauthRefresher:
     async def _refresh_via_mpay(
         self, username: str, password: str
     ) -> tuple[Optional[str], str]:
-        """非 OAuth2 流程: 登录获取 MPay SDK token, 再通过 fever_to_sauth 转换。
+        """混合流程: OAuth2 登录 + SDK info 获取 MPay token → fever_to_sauth 转换。
 
-        此流程产生的 MPay token 可直接用于 fever_to_sauth, 换取 netease 频道
-        sauth_json, 解决 4399com/4399pc 频道 code=32 问题。
-        若 fever_to_sauth 失败, 回退到 4399pc 频道 sauth_json。
+        1. 使用 OAuth2 流程登录 (不被限流, 可靠)
+        2. 用 OAuth2 登录后的 uid 调用 checkKidLoginUserCookie → 获取 sig/time/validateState
+        3. 调用 sdk/info → 获取 MPay SDK token + sdkuid
+        4. 通过 fever_to_sauth 转换为 netease 频道 sauth_json
 
         Returns:
             (sauth_json, uid) 或 (None, "")
         """
-        from .netease_direct.login_4399 import (
-            login_4399_to_sauth,
-            fetch_captcha as _fetch_captcha_4399,
-            generate_captcha_id as _gen_captcha_id_4399,
-            _generate_deviceid,
+        import re as _re
+        import httpx
+        from .netease_direct.login_4399_oauth2 import (
+            Login4399OAuth2,
+            ocr_captcha,
+            generate_captcha_id as _gen_oauth2_captcha_id,
+            fetch_captcha_image as _fetch_oauth2_captcha,
+            USER_AGENT,
         )
-        from .netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
+        from .netease_direct.login_4399 import (
+            _generate_deviceid,
+            CHECK_COOKIE_URL,
+            SDK_INFO_URL,
+            _SDK_QUERY,
+        )
         from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
 
-        # Step 1: 非 OAuth2 登录 (可能需要验证码)
-        result = await login_4399_to_sauth(username, password)
+        # Step 1: OAuth2 登录 (可靠, 不被限流)
+        oauth2_client = Login4399OAuth2()
+        oauth2_result = None
+        try:
+            oauth2_result = await oauth2_client.login(username, password)
+        finally:
+            try:
+                await oauth2_client.close()
+            except Exception:
+                pass
 
-        # 需要验证码时自动 OCR 重试
-        captcha_attempts = 0
-        if not result.get("success") and result.get("need_captcha"):
-            captcha_id = result.get("captcha_id") or _gen_captcha_id_4399()
-            for _attempt in range(10):
-                captcha_attempts += 1
-                captcha_image = await _fetch_captcha_4399(captcha_id)
-                captcha_answer = await _ocr_captcha(captcha_image)
-                if captcha_answer and len(captcha_answer) >= 4:
-                    result = await login_4399_to_sauth(
-                        username, password,
-                        captcha_answer=captcha_answer,
-                        captcha_id=captcha_id,
-                    )
-                    if result.get("success") or not result.get("need_captcha"):
-                        break
-                captcha_id = _gen_captcha_id_4399()
-
-        if not result.get("success"):
-            logger.warning(
-                f"非 OAuth2 登录失败: {result.get('message', '')}"
-            )
+        if oauth2_result is None:
             self._last_refresh_debug["mpay_flow"] = {
-                "status": "login_failed",
-                "message": result.get("message", ""),
-                "need_captcha": result.get("need_captcha", False),
-                "captcha_attempts": captcha_attempts,
+                "status": "oauth2_login_failed",
             }
             return None, ""
 
+        uid = oauth2_result.uid
         self._last_refresh_debug["mpay_flow"] = {
-            "status": "login_ok",
-            "captcha_attempts": captcha_attempts,
+            "status": "oauth2_login_ok",
+            "uid": uid,
         }
 
-        # Step 2: 使用 MPay token 通过 fever_to_sauth 转换为 netease 频道
-        sauth_str = result["sauth_json"]  # 4399pc 频道 (回退用)
-        data = result.get("data", {})
-        mpay_token = data.get("token", "")
-        mpay_sdkuid = data.get("sdkuid", "")
-        deviceid = data.get("deviceid", "") or _generate_deviceid()
+        # Step 2: 使用持久化 HTTP 客户端调用 checkKidLoginUserCookie + sdk/info
+        # OAuth2 登录已在 ptlogin.4399.com 设置了 session cookies,
+        # 但 OAuth2 流程的 helper 函数各自创建独立 client, 无法共享 cookies。
+        # 这里用 uid 直接调用 checkKidLoginUserCookie (可能需要有效 session cookie)。
+        deviceid = _generate_deviceid()
+        mpay_token = ""
+        mpay_sdkuid = uid
 
-        self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
-        self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
+            "Referer": "https://ptlogin.4399.com/",
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=15, follow_redirects=False, headers=headers
+            ) as client:
+                # checkKidLoginUserCookie
+                import time as _time_mod
+                rand_time = str(int(_time_mod.time() * 1000))
+                check_url = (
+                    f"{CHECK_COOKIE_URL}?appId=kid_wdsj&gameUrl=&rand_time={rand_time}"
+                )
+                resp = await client.get(check_url)
+
+                # 提取 sig, uid, time, validateState from redirect
+                if resp.status_code in (301, 302):
+                    redirect_url = resp.headers.get("location", "")
+                else:
+                    redirect_url = resp.text
+
+                sig_match = _re.search(r"sig=([^&]+)", redirect_url)
+                uid_match = _re.search(r"uid=([^&]+)", redirect_url)
+                time_match = _re.search(r"time=([^&]+)", redirect_url)
+                state_match = _re.search(r"validateState=([^&]+)", redirect_url)
+
+                sig = sig_match.group(1) if sig_match else ""
+                ck_uid = uid_match.group(1) if uid_match else uid
+                login_time = time_match.group(1) if time_match else ""
+                validate_state = state_match.group(1) if state_match else ""
+
+                if not sig:
+                    self._last_refresh_debug["mpay_flow"]["check_cookie"] = "no_sig"
+                    self._last_refresh_debug["mpay_flow"]["redirect"] = redirect_url[:300]
+                    return None, ""
+
+                self._last_refresh_debug["mpay_flow"]["check_cookie"] = "ok"
+                self._last_refresh_debug["mpay_flow"]["sig"] = sig[:20]
+
+                # sdk/info
+                query_str = _SDK_QUERY.format(
+                    game_id="500352",
+                    sig=sig,
+                    uid=ck_uid,
+                    time=login_time,
+                    validateState=validate_state,
+                    username=username,
+                )
+                sdk_url = f"{SDK_INFO_URL}?callback=&queryStr={query_str}"
+                resp2 = await client.get(sdk_url)
+                sdk_text = resp2.text.strip()
+
+                # 去除 JSONP 包裹
+                if sdk_text.startswith("(") and sdk_text.endswith(")"):
+                    sdk_text = sdk_text[1:-1]
+                elif "(" in sdk_text and sdk_text.endswith(")"):
+                    inner_start = sdk_text.find("(")
+                    if inner_start != -1:
+                        sdk_text = sdk_text[inner_start + 1 : -1]
+
+                sdk_data = json.loads(sdk_text) if sdk_text else {}
+                sdk_login_data = sdk_data.get("sdk_login_data", {})
+                mpay_token = sdk_login_data.get("token", "")
+                mpay_sdkuid = sdk_login_data.get("sdkuid", ck_uid)
+
+                self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
+                self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
+
+        except Exception as e:
+            self._last_refresh_debug["mpay_flow"]["sdk_info_error"] = str(e)
+            logger.warning(f"获取 MPay token 异常: {e}")
+            return None, ""
+
+        if not mpay_token:
+            self._last_refresh_debug["mpay_flow"]["mpay_token"] = "empty"
+            logger.warning("未获取到 MPay token")
+            return None, ""
+
+        # Step 3: 通过 fever_to_sauth 转换为 netease 频道
         self._last_refresh_debug["mpay_flow"]["deviceid"] = deviceid
 
-        if mpay_token and mpay_sdkuid:
-            try:
-                convert_result = await _fever_to_sauth(
-                    sdkuid=mpay_sdkuid,
-                    sessionid=mpay_token,
-                    deviceid=deviceid,
+        try:
+            convert_result = await _fever_to_sauth(
+                sdkuid=mpay_sdkuid,
+                sessionid=mpay_token,
+                deviceid=deviceid,
+            )
+            if convert_result.get("success"):
+                logger.info(
+                    f"fever_to_sauth 转换成功, "
+                    f"已切换到 netease 频道 (账号: {username})"
                 )
-                if convert_result.get("success"):
-                    sauth_str = convert_result["sauth_json"]
-                    logger.info(
-                        f"fever_to_sauth 转换成功, "
-                        f"已切换到 netease 频道 (账号: {username})"
-                    )
-                    self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "success"
-                    self._last_refresh_debug["final_channel"] = "netease"
-                else:
-                    logger.warning(
-                        f"fever_to_sauth 转换失败: "
-                        f"{convert_result.get('message', '')}, "
-                        f"回退到 4399pc 频道"
-                    )
-                    self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "failed"
-                    self._last_refresh_debug["mpay_flow"]["fever_error"] = convert_result.get("message", "")
-                    self._last_refresh_debug["final_channel"] = "4399pc"
-            except Exception as convert_err:  # noqa: BLE001
+                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "success"
+                self._last_refresh_debug["final_channel"] = "netease"
+                return convert_result["sauth_json"], mpay_sdkuid
+            else:
                 logger.warning(
-                    f"fever_to_sauth 异常: {convert_err}, "
-                    f"回退到 4399pc 频道"
+                    f"fever_to_sauth 转换失败: "
+                    f"{convert_result.get('message', '')}"
                 )
-                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "exception"
-                self._last_refresh_debug["mpay_flow"]["fever_error"] = str(convert_err)
-                self._last_refresh_debug["final_channel"] = "4399pc"
-        else:
-            logger.warning("未获取到 MPay token, 使用 4399pc 频道")
-            self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "skipped_no_token"
-            self._last_refresh_debug["final_channel"] = "4399pc"
-
-        return sauth_str, mpay_sdkuid
+                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "failed"
+                self._last_refresh_debug["mpay_flow"]["fever_error"] = convert_result.get("message", "")
+                return None, ""
+        except Exception as convert_err:
+            logger.warning(f"fever_to_sauth 异常: {convert_err}")
+            self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "exception"
+            self._last_refresh_debug["mpay_flow"]["fever_error"] = str(convert_err)
+            return None, ""
 
     async def _refresh_via_oauth2(
         self, username: str, password: str
