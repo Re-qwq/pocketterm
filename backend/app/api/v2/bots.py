@@ -574,13 +574,14 @@ async def get_bot(bot_id: str, request: Request):
     bot = await _get_bot_with_access(bot_id, user, db)
 
     # 尝试从内存中获取实时状态和错误信息
-    last_error = ""
+    last_error = bot.get("last_error", "") or ""
     runtime_logs = []
     try:
         from app.bot.manager import bot_manager
         mem_bot = bot_manager.get_bot(bot_id)
         if mem_bot:
-            last_error = mem_bot.info.last_error or ""
+            if mem_bot.info.last_error:
+                last_error = mem_bot.info.last_error
             runtime_logs = mem_bot.info.logs[-20:] if mem_bot.info.logs else []
     except Exception:
         pass

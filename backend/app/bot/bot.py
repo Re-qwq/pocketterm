@@ -340,7 +340,7 @@ class PocketBot:
         self.info.status = status
 
         # 同步状态到数据库
-        self._sync_status_to_db(status)
+        self._sync_status_to_db(status, error)
 
         timestamp = time.strftime("%H:%M:%S")
 
@@ -380,7 +380,7 @@ class PocketBot:
                 f"机器人 {self.name} 状态: {old_status.value} -> {status.value}"
             )
 
-    def _sync_status_to_db(self, status: BotStatus) -> None:
+    def _sync_status_to_db(self, status: BotStatus, error: str = "") -> None:
         """异步同步状态到数据库。"""
         status_map = {
             BotStatus.IDLE: "stopped",
@@ -396,16 +396,16 @@ class PocketBot:
         if db_status is None:
             return
         try:
-            asyncio.create_task(self._do_db_status_update(db_status))
+            asyncio.create_task(self._do_db_status_update(db_status, error))
         except Exception:
             pass
 
-    async def _do_db_status_update(self, db_status: str) -> None:
+    async def _do_db_status_update(self, db_status: str, error: str = "") -> None:
         """实际执行数据库状态更新。"""
         try:
             from app.database import get_db
             db = await get_db()
-            await db.update_bot_status(self.bot_id, db_status)
+            await db.update_bot_status(self.bot_id, db_status, error)
         except Exception:
             pass
 

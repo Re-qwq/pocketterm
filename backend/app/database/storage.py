@@ -305,6 +305,7 @@ class Database:
             await self._migrate_announcements_table()
             await self._migrate_sauth_accounts_table()
             await self._migrate_users_v2_table()
+        await self._migrate_bot_last_error_table()
 
             # -- 初始化默认商店商品 (仅在表为空时插入) -------------------
             await self._init_default_shop_products()
@@ -376,6 +377,17 @@ class Database:
         )
         await self.conn.commit()
         logger.debug("sauth_accounts 表迁移检查完成")
+
+    async def _migrate_bot_last_error_table(self) -> None:
+        """迁移: 为 bot_instances 表添加 last_error 列。"""
+        cursor = await self.conn.execute("PRAGMA table_info(bot_instances)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "last_error" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE bot_instances ADD COLUMN last_error TEXT NOT NULL DEFAULT ''"
+            )
+            await self.conn.commit()
+            logger.info("bot_instances 表已添加 last_error 列")
 
     async def _migrate_users_v2_table(self) -> None:
         """v2 迁移: 为 users 表补充 balance / email / avatar / max_storage 列。"""
@@ -731,10 +743,16 @@ class Database:
             "SELECT * FROM bot_instances ORDER BY created_at DESC"
         )).fetchall()
 
-    async def update_bot_status(self, bot_id: str, status: str) -> None:
-        await self.conn.execute(
-            "UPDATE bot_instances SET status = ? WHERE bot_id = ?", (status, bot_id)
-        )
+    async def update_bot_status(self, bot_id: str, status: str, error: str = "") -> None:
+        if error:
+            await self.conn.execute(
+                "UPDATE bot_instances SET status = ?, last_error = ? WHERE bot_id = ?",
+                (status, error, bot_id),
+            )
+        else:
+            await self.conn.execute(
+                "UPDATE bot_instances SET status = ? WHERE bot_id = ?", (status, bot_id)
+            )
         if status == "running":
             await self.conn.execute(
                 "UPDATE bot_instances SET last_started_at = ? WHERE bot_id = ?", (_now(), bot_id)
