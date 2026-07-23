@@ -293,10 +293,12 @@ class SauthRefresher:
         4399 的 login.do 在 sec=1 时要求密码使用 CryptoJS AES 加密
         (密钥: 'lzYW5qaXVqa', OpenSSL 格式)。
 
-        关键修复:
+        关键修复 (参考 account_register.py 验证过的正确实现):
         - sessionId 必须设置为验证码 ID (之前为空导致登录失败)
         - captchaId 从 verify.do 响应中提取 (之前自己生成)
-        - gameUrl 保持空字符串 (与原始 login_4399.py 一致)
+        - checkKidLoginUserCookie 必须带完整参数 (gameUrl/nick/onLineStart/show/isCrossDomain/retUrl)
+        - sdk/info 的 queryStr 必须完整 URL 编码, 包含 nick/fcm/show/isCrossDomain/rand_time/ptusertype
+        - SDK 响应中 sdk_login_data 是字符串 (token=XXX&sdkuid=YYY), 不是字典
 
         Returns:
             (sauth_json, uid) 或 (None, "")
@@ -315,7 +317,6 @@ class SauthRefresher:
             LOGIN_URL as _4399_LOGIN_URL,
             CHECK_COOKIE_URL,
             SDK_INFO_URL,
-            _SDK_QUERY,
         )
         from .netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
         from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
@@ -470,91 +471,114 @@ class SauthRefresher:
 
                 self._last_refresh_debug["mpay_flow"]["status"] = "login_ok"
 
-                # 提取 rand_time
+                # 提取 rand_time (尝试多种格式, 参考 account_register.py)
                 rand_time = str(int(_time_mod.time() * 1000))
-                rt_match = _re.search(r'"rand_time"\s*:\s*(\d+)', login_text)
-                if rt_match:
-                    rand_time = rt_match.group(1)
+                for _pattern in [
+                    r'"rand_time"\s*:\s*"?(\d+)"?',
+                    r'parent\.timestamp\s*=\s*"(\d+)"',
+                    r'timestamp\s*:\s*"(\d+)"',
+                    r'rand_time=(\d+)',
+                    r'"time"\s*:\s*"?(\d+)"?',
+                ]:
+                    rt_match = _re.search(_pattern, login_text)
+                    if rt_match:
+                        rand_time = rt_match.group(1)
+                        break
 
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
-                # gameUrl 必须设置 (空值返回 "no protocol" 错误)
+                # 参数必须与 account_register.py 完全一致, 否则返回 "invalid request"
                 from urllib.parse import quote as _url_quote
-                check_url = (
-                    f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
-                    f"&gameUrl={_url_quote(SDK_INFO_URL, safe='')}"
+                from urllib.parse import unquote as _url_unquote
+                from urllib.parse import urlparse as _url_parse
+                from urllib.parse import parse_qs as _parse_qs
+
+                _GAME_URL = "http://cdn.h5wan.4399sj.com/microterminal-h5-frame"
+                _RET_URL = (
+                    "http://ptlogin.4399.com/resource/ucenter.html"
+                    "?action=login&appId=kid_wdsj&loginLevel=8"
+                    "&regLevel=8&bizId=2100001792&externalLogin=qq"
+                    "&qrLogin=true&layout=vertical&level=101"
+                    "&css=http://microgame.5054399.net/v2/resource/cssSdk/default/login.css"
+                    "&v=2018_11_26_16&postLoginHandler=redirect"
+                    "&checkLoginUserCookie=true"
+                    "&redirectUrl=http://cdn.h5wan.4399sj.com/microterminal-h5-frame?game_id=500352"
                     f"&rand_time={rand_time}"
                 )
-
-                # 手动构建 Cookie 头, 确保 cookies 被正确发送
-                cookie_parts = []
-                for k, v in client.cookies.items():
-                    cookie_parts.append(f"{k}={v}")
-                cookie_header = "; ".join(cookie_parts)
-
-                resp2 = await client.get(
-                    check_url,
-                    follow_redirects=False,
-                    headers={"Cookie": cookie_header} if cookie_header else {},
+                check_url = (
+                    f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
+                    f"&gameUrl={_GAME_URL}?game_id=500352&rand_time={rand_time}"
+                    f"&nick=null&onLineStart=false&show=1&isCrossDomain=1"
+                    f"&retUrl={_url_quote(_RET_URL, safe='')}"
                 )
 
-                self._last_refresh_debug["mpay_flow"]["check_status"] = (
-                    resp2.status_code
-                )
-                self._last_refresh_debug["mpay_flow"]["check_location"] = (
-                    resp2.headers.get("location", "")[:500]
-                )
+                resp2 = await client.get(check_url, follow_redirects=False)
 
-                if resp2.status_code in (301, 302, 303, 307, 308):
-                    redirect_url = resp2.headers.get("location", "")
-                else:
-                    redirect_url = resp2.text
+                self._last_refresh_debug["mpay_flow"]["check_status"] = resp2.status_code
+                self._last_refresh_debug["mpay_flow"]["check_location"] = resp2.headers.get("location", "")[:500]
 
-                self._last_refresh_debug["mpay_flow"]["check_redirect_3000"] = (
-                    redirect_url[:3000]
-                )
+                if resp2.status_code != 302:
+                    self._last_refresh_debug["mpay_flow"]["check_body_500"] = resp2.text[:500]
+                    self._last_refresh_debug["mpay_flow"]["status"] = "check_not_302"
+                    return None, ""
 
-                sig_match = _re.search(r"sig=([^&]+)", redirect_url)
-                uid_match = _re.search(r"uid=([^&]+)", redirect_url)
-                time_match = _re.search(r"time=([^&]+)", redirect_url)
-                state_match = _re.search(r"validateState=([^&]+)", redirect_url)
+                redirect_url = resp2.headers.get("location", "")
+                self._last_refresh_debug["mpay_flow"]["check_redirect_3000"] = redirect_url[:3000]
 
-                sig = sig_match.group(1) if sig_match else ""
-                ck_uid = uid_match.group(1) if uid_match else ""
-                login_time = time_match.group(1) if time_match else ""
-                validate_state = state_match.group(1) if state_match else ""
+                # 从重定向 URL 查询参数中提取 sig/uid/time/validateState
+                parsed = _url_parse(redirect_url)
+                qs = _parse_qs(parsed.query)
+                sig = qs.get("sig", [""])[0]
+                ck_uid = qs.get("uid", [""])[0]
+                login_time = qs.get("time", [""])[0]
+                validate_state = qs.get("validateState", [""])[0]
 
                 if not sig:
-                    self._last_refresh_debug["mpay_flow"]["check_cookie"] = "no_sig"
+                    self._last_refresh_debug["mpay_flow"]["status"] = "no_sig"
                     return None, ""
 
                 self._last_refresh_debug["mpay_flow"]["check_cookie"] = "ok"
                 self._last_refresh_debug["mpay_flow"]["uid"] = ck_uid
 
                 # Step 6: sdk/info → MPay SDK token
-                query_str = _SDK_QUERY.format(
-                    game_id="500352",
-                    sig=sig,
-                    uid=ck_uid,
-                    time=login_time,
-                    validateState=validate_state,
-                    username=username,
+                # queryStr 必须完整 URL 编码, 且包含 nick/fcm/show/isCrossDomain/rand_time/ptusertype
+                query_str = _url_quote(
+                    f"game_id=500352&nick=null&sig={sig}"
+                    f"&uid={ck_uid}&fcm=0&show=1&isCrossDomain=1"
+                    f"&rand_time={rand_time}&ptusertype=4399"
+                    f"&time={login_time}&validateState={validate_state}"
+                    f"&username={username}",
+                    safe="",
                 )
-                sdk_url = f"{SDK_INFO_URL}?callback=&queryStr={query_str}"
+                sdk_url = (
+                    f"{SDK_INFO_URL}?callback="
+                    f"&queryStr={query_str}"
+                    f"&_={int(_time_mod.time() * 1000)}"
+                )
                 resp3 = await client.get(sdk_url)
-                sdk_text = resp3.text.strip()
 
-                # 去除 JSONP 包裹
-                if sdk_text.startswith("(") and sdk_text.endswith(")"):
-                    sdk_text = sdk_text[1:-1]
-                elif "(" in sdk_text and sdk_text.endswith(")"):
-                    inner_start = sdk_text.find("(")
-                    if inner_start != -1:
-                        sdk_text = sdk_text[inner_start + 1 : -1]
+                # 解析 SDK 响应 (account_register.py 格式):
+                # JSON 结构: {"data": {"sdk_login_data": "token=XXX&sdkuid=YYY&..."}}
+                try:
+                    sdk_data = resp3.json()
+                    sdk_login_data = sdk_data.get("data", {}).get("sdk_login_data", "")
+                except Exception:
+                    sdk_login_data = ""
 
-                sdk_data = json.loads(sdk_text) if sdk_text else {}
-                sdk_login_data = sdk_data.get("sdk_login_data", {})
-                mpay_token = sdk_login_data.get("token", "")
-                mpay_sdkuid = sdk_login_data.get("sdkuid", ck_uid)
+                # 回退: 从响应文本中正则提取
+                if not sdk_login_data:
+                    m = _re.search(r"sdk_login_data[=:]([^&\"<]+)", resp3.text)
+                    if m:
+                        sdk_login_data = _url_unquote(m.group(1))
+
+                self._last_refresh_debug["mpay_flow"]["sdk_login_data_200"] = sdk_login_data[:200]
+
+                # 从 sdk_login_data 字符串中提取 token 和 sdkuid
+                # 格式: token=XXX&sdkuid=YYY&...
+                m_token = _re.search(r"token=([^&]+)", sdk_login_data)
+                mpay_token = m_token.group(1) if m_token else ""
+
+                m_sdkuid = _re.search(r"sdkuid=([^&]+)", sdk_login_data)
+                mpay_sdkuid = m_sdkuid.group(1) if m_sdkuid else ck_uid
 
                 self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
                 self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
