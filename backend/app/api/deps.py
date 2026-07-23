@@ -39,7 +39,10 @@ COOKIE_MAX_AGE: int = 60 * 60 * 24  # 24 小时，与 ACCESS_TOKEN_EXPIRE_MINUTE
 # 认证依赖
 # ---------------------------------------------------------------------------
 def get_current_user(request: Request) -> Dict[str, Any]:
-    """从请求 Cookie 中解析 JWT 并返回当前用户信息。
+    """从请求 Cookie 或 Authorization Header 中解析 JWT 并返回当前用户信息。
+
+    优先检查 Cookie (``pocketterm_token``)，其次检查 ``Authorization: Bearer <token>``。
+    这样前端既可以通过 Cookie 认证，也可以通过 Bearer token 认证旧版 API。
 
     作为 FastAPI 依赖注入使用::
 
@@ -48,7 +51,7 @@ def get_current_user(request: Request) -> Dict[str, Any]:
             return success_response(data=user)
 
     Args:
-        request: FastAPI ``Request`` 对象（用于读取 cookies）。
+        request: FastAPI ``Request`` 对象（用于读取 cookies / headers）。
 
     Returns:
         用户信息字典，至少包含::
@@ -56,11 +59,19 @@ def get_current_user(request: Request) -> Dict[str, Any]:
             {"username": "admin", "sub": "admin", "exp": <unix>}
 
     Raises:
-        HTTPException: 401 未认证（Cookie 缺失 / token 无效 / 已过期）。
+        HTTPException: 401 未认证（Cookie/Header 缺失 / token 无效 / 已过期）。
     """
+    # 1. 优先从 Cookie 读取
     token: Optional[str] = request.cookies.get(ACCESS_COOKIE_NAME)
+
+    # 2. Cookie 没有则从 Authorization Header 读取
     if not token:
-        logger.warning("认证失败: Cookie 中未找到 token")
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    if not token:
+        logger.warning("认证失败: Cookie 和 Header 中均未找到 token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录或会话已过期",
