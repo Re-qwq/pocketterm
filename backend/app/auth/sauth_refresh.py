@@ -584,92 +584,83 @@ class SauthRefresher:
                 self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
                 self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
 
-        except Exception as e:
-            self._last_refresh_debug["mpay_flow"]["status"] = "exception"
-            self._last_refresh_debug["mpay_flow"]["error"] = str(e)
-            logger.warning(f"非 OAuth2 流程异常: {e}")
-            return None, ""
+                if not mpay_token:
+                    self._last_refresh_debug["mpay_flow"]["status"] = "no_token"
+                    logger.warning("未获取到 SDK token")
+                    return None, ""
 
-        if not mpay_token:
-            self._last_refresh_debug["mpay_flow"]["status"] = "no_token"
-            logger.warning("未获取到 SDK token")
-            return None, ""
+                # Step 7: 构建 4399pc sauth_json → uni_sauth 统一认证
+                # 关键: 必须使用已有 client (带 4399 会话 cookies), 否则 uni_sauth 返回 502
+                import secrets as _secrets
 
-        # Step 7: 构建 4399pc sauth_json → uni_sauth 统一认证
-        # 参考 account_register.py 完整流程 (不使用 fever_to_sauth, 因为 SDK token 不是 MPay token)
-        # 流程: 构建 4399pc 频道 sauth_json (含 realname/timestamp/userid)
-        #       → uni_sauth 服务端转换 (WPFLauncher UA)
-        #       → 使用原始 4399pc sauth_json (uni_sauth 是服务端 side-effect)
-        import secrets as _secrets
+                _hex_chars = "0123456789ABCDEF"
+                _fp = {
+                    "client_login_sn": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
+                    "deviceid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
+                    "udid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
+                }
+                _sauth_inner = {
+                    "aim_info": '{"aim":"127.0.0.1","country":"CN","tz":"+0800","tzid":""}',
+                    "app_channel": "4399pc",
+                    "client_login_sn": _fp["client_login_sn"],
+                    "deviceid": _fp["deviceid"],
+                    "gameid": "x19",
+                    "gas_token": "",
+                    "ip": "127.0.0.1",
+                    "login_channel": "4399pc",
+                    "platform": "pc",
+                    "realname": '{"realname_type":"0"}',
+                    "sdk_version": "1.0.0",
+                    "sdkuid": mpay_sdkuid,
+                    "sessionid": mpay_token,
+                    "source_platform": "pc",
+                    "timestamp": rand_time,
+                    "udid": _fp["udid"],
+                    "userid": username.lower(),
+                }
+                _sauth_inner_str = json.dumps(_sauth_inner, ensure_ascii=False)
+                _sauth_wrapped = json.dumps(
+                    {"sauth_json": _sauth_inner_str}, ensure_ascii=False
+                )
 
-        _hex_chars = "0123456789ABCDEF"
-        _fp = {
-            "client_login_sn": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
-            "deviceid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
-            "udid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
-        }
-        _sauth_inner = {
-            "aim_info": '{"aim":"127.0.0.1","country":"CN","tz":"+0800","tzid":""}',
-            "app_channel": "4399pc",
-            "client_login_sn": _fp["client_login_sn"],
-            "deviceid": _fp["deviceid"],
-            "gameid": "x19",
-            "gas_token": "",
-            "ip": "127.0.0.1",
-            "login_channel": "4399pc",
-            "platform": "pc",
-            "realname": '{"realname_type":"0"}',
-            "sdk_version": "1.0.0",
-            "sdkuid": mpay_sdkuid,
-            "sessionid": mpay_token,
-            "source_platform": "pc",
-            "timestamp": rand_time,
-            "udid": _fp["udid"],
-            "userid": username.lower(),
-        }
-        _sauth_inner_str = json.dumps(_sauth_inner, ensure_ascii=False)
-        _sauth_wrapped = json.dumps(
-            {"sauth_json": _sauth_inner_str}, ensure_ascii=False
-        )
-
-        _UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
-        _uni_headers = {
-            "User-Agent": "WPFLauncher/0.0.0.0",
-            "Content-Type": "application/json",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=15, verify=False) as _uni_client:
-                _uni_resp = await _uni_client.post(
+                _UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
+                _uni_headers = {
+                    "User-Agent": "WPFLauncher/0.0.0.0",
+                    "Content-Type": "application/json",
+                }
+                # 使用已有 client (带 4399 登录 cookies) 调用 uni_sauth
+                _uni_resp = await client.post(
                     _UNI_SAUTH_URL,
                     content=_sauth_inner_str.encode("utf-8"),
                     headers=_uni_headers,
                 )
-            try:
-                _uni_data = _uni_resp.json()
-            except Exception:
-                _uni_data = {}
-            _uni_code = _uni_data.get("code", -1)
-            self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = _uni_code
-            self._last_refresh_debug["mpay_flow"]["uni_sauth_resp_500"] = (
-                _uni_resp.text[:500]
-            )
-
-            if _uni_code == 0:
-                logger.info(f"uni_sauth 成功 (账号: {username})")
-                self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "success"
-                self._last_refresh_debug["final_channel"] = "4399pc+uni_sauth"
-                return _sauth_wrapped, mpay_sdkuid
-            else:
-                logger.warning(
-                    f"uni_sauth 失败: code={_uni_code}, "
-                    f"resp={_uni_resp.text[:200]}"
+                try:
+                    _uni_data = _uni_resp.json()
+                except Exception:
+                    _uni_data = {}
+                _uni_code = _uni_data.get("code", -1)
+                self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = _uni_code
+                self._last_refresh_debug["mpay_flow"]["uni_sauth_resp_500"] = (
+                    _uni_resp.text[:500]
                 )
-                self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "failed"
-                return None, ""
-        except Exception as _uni_err:
-            self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "exception"
-            self._last_refresh_debug["mpay_flow"]["uni_error"] = str(_uni_err)
-            logger.warning(f"uni_sauth 异常: {_uni_err}")
+
+                if _uni_code == 0:
+                    logger.info(f"uni_sauth 成功 (账号: {username})")
+                    self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "success"
+                    self._last_refresh_debug["final_channel"] = "4399pc+uni_sauth"
+                    return _sauth_wrapped, mpay_sdkuid
+                else:
+                    logger.warning(
+                        f"uni_sauth 失败: code={_uni_code}, "
+                        f"resp={_uni_resp.text[:200]}"
+                    )
+                    self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "failed"
+                    return None, ""
+
+        except Exception as e:
+            self._last_refresh_debug["mpay_flow"]["status"] = "exception"
+            self._last_refresh_debug["mpay_flow"]["error"] = str(e)
+            logger.warning(f"非 OAuth2 流程异常: {e}")
             return None, ""
 
     async def _refresh_via_oauth2(
