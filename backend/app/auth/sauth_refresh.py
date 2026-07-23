@@ -74,6 +74,8 @@ class SauthRefresher:
         self._rr_index: int = 0
         # 刷新锁: 避免并发刷新
         self._lock = asyncio.Lock()
+        # 调试信息: 记录最后一次刷新的详细过程
+        self._last_refresh_debug: dict = {}
 
     # ------------------------------------------------------------------
     # 状态查询
@@ -93,6 +95,7 @@ class SauthRefresher:
             "cached_uid": self._cached_uid,
             "cached_username": self._cached_username,
             "cache_ttl_seconds": SAUTH_CACHE_TTL,
+            "last_refresh_debug": self._last_refresh_debug,
         }
 
     def _is_cache_valid(self) -> bool:
@@ -213,6 +216,14 @@ class SauthRefresher:
         """
         logger.info(f"开始刷新 sauth_json (4399 账号: {account_username})")
         db = await self._get_db()
+        import time as _time
+        self._last_refresh_debug = {
+            "timestamp": _time.time(),
+            "username": account_username,
+            "mpay_flow": None,
+            "oauth2_flow": None,
+            "final_channel": None,
+        }
 
         sauth_str: Optional[str] = None
         uid: str = ""
@@ -224,6 +235,10 @@ class SauthRefresher:
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"非 OAuth2 流程异常: {e}")
+            self._last_refresh_debug["mpay_flow"] = {
+                "status": "exception",
+                "error": str(e),
+            }
 
         # 回退: OAuth2 流程 (4399com 频道, 可能遇到 code=32)
         if sauth_str is None:
@@ -238,6 +253,10 @@ class SauthRefresher:
                 logger.exception(
                     f"OAuth2 流程异常 (账号: {account_username}): {e}"
                 )
+                self._last_refresh_debug["oauth2_flow"] = {
+                    "status": "exception",
+                    "error": str(e),
+                }
 
         if sauth_str is None:
             logger.error(f"4399 登录失败 (账号: {account_username})")
@@ -291,9 +310,11 @@ class SauthRefresher:
         result = await login_4399_to_sauth(username, password)
 
         # 需要验证码时自动 OCR 重试
+        captcha_attempts = 0
         if not result.get("success") and result.get("need_captcha"):
             captcha_id = result.get("captcha_id") or _gen_captcha_id_4399()
             for _attempt in range(10):
+                captcha_attempts += 1
                 captcha_image = await _fetch_captcha_4399(captcha_id)
                 captcha_answer = await _ocr_captcha(captcha_image)
                 if captcha_answer and len(captcha_answer) >= 4:
@@ -310,7 +331,18 @@ class SauthRefresher:
             logger.warning(
                 f"非 OAuth2 登录失败: {result.get('message', '')}"
             )
+            self._last_refresh_debug["mpay_flow"] = {
+                "status": "login_failed",
+                "message": result.get("message", ""),
+                "need_captcha": result.get("need_captcha", False),
+                "captcha_attempts": captcha_attempts,
+            }
             return None, ""
+
+        self._last_refresh_debug["mpay_flow"] = {
+            "status": "login_ok",
+            "captcha_attempts": captcha_attempts,
+        }
 
         # Step 2: 使用 MPay token 通过 fever_to_sauth 转换为 netease 频道
         sauth_str = result["sauth_json"]  # 4399pc 频道 (回退用)
@@ -318,6 +350,10 @@ class SauthRefresher:
         mpay_token = data.get("token", "")
         mpay_sdkuid = data.get("sdkuid", "")
         deviceid = data.get("deviceid", "") or _generate_deviceid()
+
+        self._last_refresh_debug["mpay_flow"]["mpay_token_len"] = len(mpay_token)
+        self._last_refresh_debug["mpay_flow"]["mpay_sdkuid"] = mpay_sdkuid
+        self._last_refresh_debug["mpay_flow"]["deviceid"] = deviceid
 
         if mpay_token and mpay_sdkuid:
             try:
@@ -332,19 +368,29 @@ class SauthRefresher:
                         f"fever_to_sauth 转换成功, "
                         f"已切换到 netease 频道 (账号: {username})"
                     )
+                    self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "success"
+                    self._last_refresh_debug["final_channel"] = "netease"
                 else:
                     logger.warning(
                         f"fever_to_sauth 转换失败: "
                         f"{convert_result.get('message', '')}, "
                         f"回退到 4399pc 频道"
                     )
+                    self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "failed"
+                    self._last_refresh_debug["mpay_flow"]["fever_error"] = convert_result.get("message", "")
+                    self._last_refresh_debug["final_channel"] = "4399pc"
             except Exception as convert_err:  # noqa: BLE001
                 logger.warning(
                     f"fever_to_sauth 异常: {convert_err}, "
                     f"回退到 4399pc 频道"
                 )
+                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "exception"
+                self._last_refresh_debug["mpay_flow"]["fever_error"] = str(convert_err)
+                self._last_refresh_debug["final_channel"] = "4399pc"
         else:
             logger.warning("未获取到 MPay token, 使用 4399pc 频道")
+            self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = "skipped_no_token"
+            self._last_refresh_debug["final_channel"] = "4399pc"
 
         return sauth_str, mpay_sdkuid
 
@@ -362,6 +408,9 @@ class SauthRefresher:
         try:
             result = await client.login(username, password)
             if result is None:
+                self._last_refresh_debug["oauth2_flow"] = {
+                    "status": "login_failed",
+                }
                 return None, ""
 
             sauth_dict = build_sauth_json(result.uid, result.sessionid)
@@ -369,7 +418,19 @@ class SauthRefresher:
                 {"sauth_json": json.dumps(sauth_dict, ensure_ascii=False)},
                 ensure_ascii=False,
             )
+            if not self._last_refresh_debug.get("final_channel"):
+                self._last_refresh_debug["final_channel"] = "4399com"
+            self._last_refresh_debug["oauth2_flow"] = {
+                "status": "success",
+                "uid": result.uid,
+            }
             return sauth_str, result.uid
+        except Exception as e:
+            self._last_refresh_debug["oauth2_flow"] = {
+                "status": "exception",
+                "error": str(e),
+            }
+            raise
         finally:
             try:
                 await client.close()
