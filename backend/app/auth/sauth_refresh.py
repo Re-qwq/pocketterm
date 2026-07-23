@@ -589,8 +589,9 @@ class SauthRefresher:
                     logger.warning("未获取到 SDK token")
                     return None, ""
 
-                # Step 7: 构建 4399pc sauth_json → uni_sauth 统一认证
-                # 关键: 必须使用已有 client (带 4399 会话 cookies), 否则 uni_sauth 返回 502
+                # Step 7: 构建 4399pc sauth_json 并直接用 login-otp 验证
+                # uni_sauth 返回 502 (可能 4399pc 频道已被网易限制)
+                # 直接用 4399pc sauth_json 测试 login-otp, 如果成功则直接使用
                 import secrets as _secrets
 
                 _hex_chars = "0123456789ABCDEF"
@@ -623,44 +624,38 @@ class SauthRefresher:
                     {"sauth_json": _sauth_inner_str}, ensure_ascii=False
                 )
 
-                _UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
-                _uni_headers = {
+                # 直接用 login-otp 验证 4399pc sauth_json
+                _LOGIN_OTP_URL = "https://x19obtcore.nie.netease.com:8443/login-otp"
+                _otp_headers = {
                     "User-Agent": "WPFLauncher/0.0.0.0",
                     "Content-Type": "application/json",
                 }
-                # 提取 cookies 到新客户端 (避免 Origin/Referer 头干扰 uni_sauth)
-                _uni_cookies = dict(client.cookies)
-                self._last_refresh_debug["mpay_flow"]["uni_cookie_count"] = len(_uni_cookies)
-                self._last_refresh_debug["mpay_flow"]["uni_cookie_names"] = list(_uni_cookies.keys())
-                async with httpx.AsyncClient(
-                    timeout=15, verify=False, cookies=_uni_cookies
-                ) as _uni_client:
-                    _uni_resp = await _uni_client.post(
-                        _UNI_SAUTH_URL,
-                        content=_sauth_inner_str.encode("utf-8"),
-                        headers=_uni_headers,
-                    )
+                _otp_resp = await client.post(
+                    _LOGIN_OTP_URL,
+                    content=_sauth_wrapped.encode("utf-8"),
+                    headers=_otp_headers,
+                )
                 try:
-                    _uni_data = _uni_resp.json()
+                    _otp_data = _otp_resp.json()
                 except Exception:
-                    _uni_data = {}
-                _uni_code = _uni_data.get("code", -1)
-                self._last_refresh_debug["mpay_flow"]["uni_sauth_code"] = _uni_code
-                self._last_refresh_debug["mpay_flow"]["uni_sauth_resp_500"] = (
-                    _uni_resp.text[:500]
+                    _otp_data = {}
+                _otp_code = _otp_data.get("code", -1)
+                self._last_refresh_debug["mpay_flow"]["login_otp_code"] = _otp_code
+                self._last_refresh_debug["mpay_flow"]["login_otp_resp_500"] = (
+                    _otp_resp.text[:500]
                 )
 
-                if _uni_code == 0:
-                    logger.info(f"uni_sauth 成功 (账号: {username})")
-                    self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "success"
-                    self._last_refresh_debug["final_channel"] = "4399pc+uni_sauth"
+                if _otp_code == 0:
+                    logger.info(f"login-otp 成功 (4399pc 频道, 账号: {username})")
+                    self._last_refresh_debug["mpay_flow"]["login_otp"] = "success"
+                    self._last_refresh_debug["final_channel"] = "4399pc"
                     return _sauth_wrapped, mpay_sdkuid
                 else:
                     logger.warning(
-                        f"uni_sauth 失败: code={_uni_code}, "
-                        f"resp={_uni_resp.text[:200]}"
+                        f"login-otp 失败 (4399pc): code={_otp_code}, "
+                        f"resp={_otp_resp.text[:200]}"
                     )
-                    self._last_refresh_debug["mpay_flow"]["uni_sauth"] = "failed"
+                    self._last_refresh_debug["mpay_flow"]["login_otp"] = "failed"
                     return None, ""
 
         except Exception as e:
