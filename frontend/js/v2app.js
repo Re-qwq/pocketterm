@@ -2130,6 +2130,8 @@
                     toastSuccess("配置已保存");
                     state.botConfigDirty = false;
                     await loadPanelBot();
+                } else {
+                    toastError(res.detail || res.message || "保存失败");
                 }
             } else {
                 // 创建新机器人
@@ -3063,6 +3065,12 @@
                 toastError("请填写服务器编号");
                 return;
             }
+        } else if (accountSource === "pool") {
+            payload.server_code = $("createBotPoolServerCode")?.value.trim() || "";
+            if (!payload.server_code) {
+                toastError("请填写服务器编号");
+                return;
+            }
         }
 
         try {
@@ -3082,6 +3090,7 @@
                 $("createBotManualPass") && ($("createBotManualPass").value = "");
                 $("createBotSauthJson") && ($("createBotSauthJson").value = "");
                 $("createBotServerCode") && ($("createBotServerCode").value = "");
+                $("createBotPoolServerCode") && ($("createBotPoolServerCode").value = "");
                 switchView("bots");
                 await loadBots();
             } else {
