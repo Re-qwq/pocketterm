@@ -3284,18 +3284,30 @@
             if ($("shopBalanceText")) $("shopBalanceText").textContent = parseFloat(balance).toFixed(2);
         }
 
-        // 渲染商品 (按分类分组)
-        let products = [];
+        // 渲染商品 (按分类分组) - API 返回 {panel_card: [...], register_card: [...], ...}
+        let productsGrouped = {};
         if (productsRes.status === "fulfilled" && productsRes.value) {
-            products = productsRes.value.data || productsRes.value || [];
+            const raw = productsRes.value.data || productsRes.value;
+            if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+                productsGrouped = raw;
+            } else if (Array.isArray(raw)) {
+                // 兼容: 如果直接返回数组, 按 category 分组
+                raw.forEach((p) => {
+                    const cat = p.category || p.type || "other";
+                    if (!productsGrouped[cat]) productsGrouped[cat] = [];
+                    productsGrouped[cat].push(p);
+                });
+            }
         }
-        if (!Array.isArray(products)) products = [];
-        const cards = products.filter((p) => (p.category || p.type || "") === "card");
-        const plugins = products.filter((p) => (p.category || p.type || "") === "plugin");
-        const buildings = products.filter((p) => (p.category || p.type || "") === "building");
-        renderProducts(cards, "cardProducts");
-        renderProducts(plugins, "pluginProducts");
-        renderProducts(buildings, "buildingProducts");
+        const cardProducts = [
+            ...(productsGrouped.panel_card || []),
+            ...(productsGrouped.register_card || []),
+        ];
+        const pluginProducts = productsGrouped.plugin_file || [];
+        const buildingProducts = productsGrouped.building_file || [];
+        renderProducts(cardProducts, "cardProducts");
+        renderProducts(pluginProducts, "pluginProducts");
+        renderProducts(buildingProducts, "buildingProducts");
 
         // 渲染订单
         let orders = [];
@@ -3415,22 +3427,28 @@
             api("/files/my"),
         ]);
 
-        let plugins = [], buildings = [], myFiles = [];
+        let plugins = [], buildings = [], myUploaded = [], myPurchased = [];
         if (pluginRes.status === "fulfilled" && pluginRes.value) {
-            plugins = pluginRes.value.data || pluginRes.value || [];
+            const d = pluginRes.value.data || pluginRes.value;
+            plugins = Array.isArray(d) ? d : [];
         }
         if (buildingRes.status === "fulfilled" && buildingRes.value) {
-            buildings = buildingRes.value.data || buildingRes.value || [];
+            const d = buildingRes.value.data || buildingRes.value;
+            buildings = Array.isArray(d) ? d : [];
         }
         if (myRes.status === "fulfilled" && myRes.value) {
-            myFiles = myRes.value.data || myRes.value || [];
+            const d = myRes.value.data || myRes.value;
+            if (d && typeof d === "object" && !Array.isArray(d)) {
+                myUploaded = Array.isArray(d.uploaded) ? d.uploaded : [];
+                myPurchased = Array.isArray(d.purchased) ? d.purchased : [];
+            } else if (Array.isArray(d)) {
+                myUploaded = d;
+            }
         }
-        if (!Array.isArray(plugins)) plugins = [];
-        if (!Array.isArray(buildings)) buildings = [];
-        if (!Array.isArray(myFiles)) myFiles = [];
         renderFileList(plugins, "pluginFilesList");
         renderFileList(buildings, "buildingFilesList");
-        renderMyFiles(myFiles, "myFilesList");
+        // 我的文件: 合并上传 + 购买
+        renderMyFiles(myUploaded, "myFilesList");
     }
 
     /**
@@ -3534,7 +3552,7 @@
             const name = f.name || f.filename || "未命名";
             const desc = f.description || f.desc || "";
             const price = parseFloat(f.price || 0).toFixed(2);
-            const size = formatFileSize(f.size);
+            const size = formatFileSize(f.file_size || f.size);
             const uploader = f.uploader || f.username || f.author || "";
             const purchased = f.purchased || f.owned || false;
             const isFree = parseFloat(f.price || 0) === 0;
@@ -3699,7 +3717,7 @@
                 const category = f.category || "";
                 const uploader = f.uploader || f.username || f.author || "-";
                 const catLabel = category === "plugin" ? "插件" : category === "building" ? "建筑" : category;
-                const size = formatFileSize(f.size);
+                const size = formatFileSize(f.file_size || f.size);
                 return `
                     <div style="padding:14px;border:1px solid var(--border-muted);border-radius:10px;background:var(--bg-elevated);margin-bottom:10px;">
                         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
@@ -3752,9 +3770,11 @@
         const reason = prompt("请输入拒绝原因:");
         if (reason === null) return; // 用户取消
         try {
+            const formData = new FormData();
+            formData.append("reason", reason || "");
             const res = await api(`/files/${fileId}/reject`, {
                 method: "POST",
-                body: { reason: reason || "" },
+                body: formData,
             });
             if (res.success !== false) {
                 toastSuccess("文件已拒绝");

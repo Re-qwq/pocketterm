@@ -144,8 +144,11 @@ def _file_to_dict(f) -> dict:
 
 @router.get("/list")
 async def list_files(request: Request, category: Optional[str] = None):
-    """列出已审核通过的文件 (普通用户不可见 pending/rejected)。"""
-    await _optional_user(request)
+    """列出已审核通过的文件 (普通用户不可见 pending/rejected)。
+
+    返回每条文件附带 ``uploader`` (上传者用户名) 和 ``purchased`` (当前用户是否已购买)。
+    """
+    current_user = await _optional_user(request)
     db = await get_db()
 
     if category:
@@ -155,17 +158,39 @@ async def list_files(request: Request, category: Optional[str] = None):
                 detail=f"无效的分类，可选: {', '.join(VALID_CATEGORIES)}",
             )
         rows = await (await db.conn.execute(
-            "SELECT * FROM user_files WHERE status = 'approved' AND category = ? "
-            "ORDER BY created_at DESC",
+            """SELECT uf.*, u.username AS uploader_name
+               FROM user_files uf
+               LEFT JOIN users u ON uf.user_id = u.user_id
+               WHERE uf.status = 'approved' AND uf.category = ?
+               ORDER BY uf.created_at DESC""",
             (category,),
         )).fetchall()
     else:
         rows = await (await db.conn.execute(
-            "SELECT * FROM user_files WHERE status = 'approved' "
-            "ORDER BY created_at DESC"
+            """SELECT uf.*, u.username AS uploader_name
+               FROM user_files uf
+               LEFT JOIN users u ON uf.user_id = u.user_id
+               WHERE uf.status = 'approved'
+               ORDER BY uf.created_at DESC"""
         )).fetchall()
 
-    return {"success": True, "data": [_file_to_dict(r) for r in rows]}
+    # 查询当前用户已购买的文件 ID 集合
+    purchased_ids: set[str] = set()
+    if current_user:
+        pur_rows = await (await db.conn.execute(
+            "SELECT file_id FROM shop_orders WHERE user_id = ? AND file_id != '' AND status = 'completed'",
+            (current_user["user_id"],),
+        )).fetchall()
+        purchased_ids = {r["file_id"] for r in pur_rows}
+
+    result = []
+    for r in rows:
+        d = _file_to_dict(r)
+        d["uploader"] = r["uploader_name"] or ""
+        d["purchased"] = r["file_id"] in purchased_ids or r["user_id"] == (current_user["user_id"] if current_user else -1)
+        result.append(d)
+
+    return {"success": True, "data": result}
 
 
 # ============================================================================
@@ -420,7 +445,8 @@ async def purchase_file(file_id: str, request: Request):
     if row["user_id"] == user_id:
         return {"success": True, "message": "这是您自己的文件", "data": {"file_id": file_id}}
 
-    # 事务: 扣款 + 创建订单
+    # 事务: 扣款 + 增加卖家余额 + 创建订单
+    seller_id = row["user_id"]
     try:
         bal_row = await (await db.conn.execute(
             "SELECT balance FROM users WHERE user_id = ?", (user_id,)
@@ -436,6 +462,12 @@ async def purchase_file(file_id: str, request: Request):
         )
         if cur.rowcount == 0:
             raise HTTPException(status_code=400, detail="余额不足，扣款失败")
+
+        # 卖家获得对应余额
+        await db.conn.execute(
+            "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+            (price, seller_id),
+        )
 
         order_id = f"o_{uuid.uuid4().hex[:12]}"
         await db.conn.execute(
@@ -482,10 +514,19 @@ async def list_pending_files(request: Request):
     db = await get_db()
 
     rows = await (await db.conn.execute(
-        "SELECT * FROM user_files WHERE status = 'pending' ORDER BY created_at DESC"
+        """SELECT uf.*, u.username AS uploader_name
+           FROM user_files uf
+           LEFT JOIN users u ON uf.user_id = u.user_id
+           WHERE uf.status = 'pending' ORDER BY uf.created_at DESC"""
     )).fetchall()
 
-    return {"success": True, "data": [_file_to_dict(r) for r in rows]}
+    result = []
+    for r in rows:
+        d = _file_to_dict(r)
+        d["uploader"] = r["uploader_name"] or ""
+        result.append(d)
+
+    return {"success": True, "data": result}
 
 
 # ============================================================================

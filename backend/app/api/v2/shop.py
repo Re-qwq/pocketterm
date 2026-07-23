@@ -151,7 +151,7 @@ async def get_balance(request: Request):
     """获取当前用户余额。"""
     from .auth import require_user
     user = await require_user(request)
-    return {"success": True, "data": {"balance": user["balance"]}}
+    return {"success": True, "data": {"balance": user.get("balance", 0) if isinstance(user, dict) else user["balance"]}}
 
 
 # ============================================================================
