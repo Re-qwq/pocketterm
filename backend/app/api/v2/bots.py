@@ -617,6 +617,75 @@ async def get_bot(bot_id: str, request: Request):
 # 启动/停止/重启
 # ============================================================================
 
+@router.get("/{bot_id}/debug")
+async def debug_bot(bot_id: str, request: Request):
+    """调试端点: 返回机器人完整配置和诊断信息。"""
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    bot = await _get_bot_with_access(bot_id, user, db)
+
+    # 尝试构建 BotConfig 并返回关键字段
+    config_info = {}
+    try:
+        config = await _build_bot_config(bot, db)
+        config_info = {
+            "name": config.name,
+            "server_code": config.server_code,
+            "server_type": config.server_type.value,
+            "access_point_type": config.access_point_type.value,
+            "auth_method": config.auth_method,
+            "auth_server": config.auth_server,
+            "api_key": (config.api_key[:12] + "...") if config.api_key else "(empty)",
+            "sauth_json_length": len(config.sauth_json) if config.sauth_json else 0,
+            "sauth_json_preview": (config.sauth_json[:80] + "...") if config.sauth_json else "(empty)",
+            "cookie": "(set)" if config.cookie else "(empty)",
+            "device_model": config.device_model,
+            "auto_reconnect": config.auto_reconnect,
+            "max_reconnect_attempts": config.max_reconnect_attempts,
+            "account_id": config.account_id,
+        }
+    except Exception as e:
+        config_info = {"error": f"_build_bot_config failed: {type(e).__name__}: {e}"}
+
+    # 内存中的 bot 实例状态
+    mem_info = {}
+    try:
+        from app.bot.manager import bot_manager
+        mem_bot = bot_manager.get_bot(bot_id)
+        if mem_bot:
+            mem_info = {
+                "found": True,
+                "status": mem_bot.info.status.value,
+                "last_error": mem_bot.info.last_error,
+                "logs_count": len(mem_bot.info.logs),
+                "recent_logs": mem_bot.info.logs[-10:] if mem_bot.info.logs else [],
+                "connected_at": mem_bot.info.connected_at,
+                "_running": getattr(mem_bot, '_running', None),
+                "_reconnect_count": getattr(mem_bot, '_reconnect_count', None),
+                "has_access_point": mem_bot._access_point is not None,
+                "ap_status": mem_bot._access_point.info.status.value if mem_bot._access_point else None,
+                "ap_last_error": mem_bot._access_point.info.last_error if mem_bot._access_point else None,
+            }
+        else:
+            mem_info = {"found": False}
+    except Exception as e:
+        mem_info = {"error": str(e)}
+
+    return {
+        "success": True,
+        "data": {
+            "bot_id": bot["bot_id"],
+            "name": bot["name"],
+            "db_status": bot["status"],
+            "db_last_error": bot.get("last_error", ""),
+            "db_config": json.loads(bot["config"]) if bot["config"] else {},
+            "config_info": config_info,
+            "memory_info": mem_info,
+        },
+    }
+
 @router.get("/{bot_id}/ban-status")
 async def get_ban_status(bot_id: str, request: Request):
     """获取机器人关联账号的封号状态。"""

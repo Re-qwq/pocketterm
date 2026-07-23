@@ -980,7 +980,33 @@ class PocketBot:
         # 创建接入点
         await self._setup_access_point()
 
-        # 根据服务器类型选择连接逻辑
+        # PurePythonAccessPoint 在 start() 中同步完成认证+连接+生成
+        # 如果接入点已触发 connected/spawn 事件, 跳过 Go 接入点的轮询等待逻辑
+        if self.info.status in (BotStatus.CONNECTED, BotStatus.SPAWNED):
+            self._set_status(BotStatus.SPAWNED)
+            self.info.connected_at = time.time()
+            self.info.add_log(
+                "info",
+                f"机器人 {self.name} 已成功进入{type_name} {self.config.server_code}",
+            )
+            self.add_chat(
+                "System",
+                f"机器人 {self.name} 已成功进入{type_name}!",
+                is_system=True,
+            )
+            print(
+                f"  {Colors.GREEN}{Colors.BOLD}已进入游戏! "
+                f"机器人名称: {self.name}{Colors.RESET}",
+                flush=True,
+            )
+            print(f"{Colors.CYAN}{'─'*62}{Colors.RESET}\n", flush=True)
+            await self._emit("connect", self)
+            await self._emit("spawn", self)
+            await self._emit("join_room", self, self.config.server_type)
+            self._on_connect_success()
+            return
+
+        # 根据服务器类型选择连接逻辑 (Go 接入点异步模式)
         if (
             self.config.server_type == ServerType.CUSTOM
             and self.config.server_address

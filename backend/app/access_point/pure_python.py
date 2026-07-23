@@ -168,8 +168,15 @@ class PurePythonAccessPoint(AccessPoint):
             await self._client.connect(host, port)
 
             self._connected = True
+            self._spawned = True
             self._log("已连接到游戏服务器", "success")
             await self._emit("event", "connected", {})
+
+            # 纯Python接入点: 连接成功后即视为已生成 (spawn)
+            # Go接入点需要等待 StartGame 包, 但纯Python在 connect() 中已完成握手
+            bot_name = self.config.get("bot_name", "")
+            self._log(f"机器人已生成: {bot_name}", "success")
+            await self._emit("event", "spawn", {"bot_name": bot_name})
 
             # 启动接收循环
             self._recv_task = asyncio.create_task(self._recv_loop())
