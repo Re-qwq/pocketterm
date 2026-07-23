@@ -121,6 +121,8 @@ class PurePythonAccessPoint(AccessPoint):
         auth_result = await self._authenticate(server_code, server_password)
         if not auth_result:
             self._log("认证失败", "error")
+            if not self.info.last_error:
+                self.info.last_error = "认证失败 (请检查账号凭证或服务器状态)"
             self.update_status(AccessPointStatus.CRASHED)
             return
 
@@ -129,6 +131,7 @@ class PurePythonAccessPoint(AccessPoint):
 
         if not self._server_address:
             self._log("未获取到服务器地址", "error")
+            self.info.last_error = "未获取到服务器地址"
             self.update_status(AccessPointStatus.CRASHED)
             return
 
@@ -175,16 +178,19 @@ class PurePythonAccessPoint(AccessPoint):
 
         except LoginError as e:
             self._log(f"登录失败: {e}", "error")
+            self.info.last_error = f"登录失败: {e}"
             self.update_status(AccessPointStatus.CRASHED)
             await self._emit("error", "login_failed", str(e))
 
         except AccountBannedError as e:
             self._log(f"账号被封禁: {e}", "error")
+            self.info.last_error = f"账号被封禁: {e}"
             self.update_status(AccessPointStatus.CRASHED)
             await self._emit("ban", "account_banned", str(e))
 
         except Exception as e:
             self._log(f"连接失败: {e}", "error")
+            self.info.last_error = f"连接失败: {e}"
             self.update_status(AccessPointStatus.CRASHED)
             await self._emit("error", "connection_failed", str(e))
 
@@ -414,12 +420,16 @@ class PurePythonAccessPoint(AccessPoint):
             err_msg = str(e)
             if "code=29" in err_msg or "封禁" in err_msg:
                 self._log("账号已被网易封禁 (code=29)！", "error")
-            elif "code=32" in err_msg:
-                self._log("网易服务器返回错误 (code=32)", "error")
+                self.info.last_error = "账号已被网易封禁"
+            elif "code=32" in err_msg or "维护中" in err_msg:
+                self._log("网易服务器正在维护中 (code=32), 请稍候再试", "error")
+                self.info.last_error = "网易服务器正在维护中, 请稍候再试"
             elif "code=" in err_msg:
                 self._log(f"网易认证失败: {err_msg}", "error")
+                self.info.last_error = f"网易认证失败: {err_msg}"
             else:
                 self._log(f"网易直连认证异常: {err_msg}", "error")
+                self.info.last_error = f"认证异常: {err_msg}"
             logger.exception("网易直连认证失败")
             return None
 
