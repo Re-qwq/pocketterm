@@ -201,6 +201,9 @@ class SauthRefresher:
     ) -> Optional[str]:
         """使用指定 4399 账号登录, 获取全新的 sauth_json 字符串。
 
+        优先使用非 OAuth2 流程 (可获取 MPay SDK token 用于 fever_to_sauth
+        转换为 netease 频道), 失败则回退到 OAuth2 流程 (4399com 频道)。
+
         Args:
             account_username: 4399 用户名。
             account_password: 4399 密码。
@@ -211,87 +214,162 @@ class SauthRefresher:
         logger.info(f"开始刷新 sauth_json (4399 账号: {account_username})")
         db = await self._get_db()
 
+        sauth_str: Optional[str] = None
+        uid: str = ""
+
+        # 优先: 非 OAuth2 流程 (获取 MPay token → fever_to_sauth → netease 频道)
+        try:
+            sauth_str, uid = await self._refresh_via_mpay(
+                account_username, account_password
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"非 OAuth2 流程异常: {e}")
+
+        # 回退: OAuth2 流程 (4399com 频道, 可能遇到 code=32)
+        if sauth_str is None:
+            logger.info(
+                f"回退到 OAuth2 流程 (账号: {account_username})"
+            )
+            try:
+                sauth_str, uid = await self._refresh_via_oauth2(
+                    account_username, account_password
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    f"OAuth2 流程异常 (账号: {account_username}): {e}"
+                )
+
+        if sauth_str is None:
+            logger.error(f"4399 登录失败 (账号: {account_username})")
+            await self._log_refresh(
+                db, success=False,
+                message=f"4399 登录失败 (账号: {account_username})",
+                username=account_username,
+            )
+            return None
+
+        # 更新账号记录: uid / sauth_json / last_refresh_at, 恢复 active
+        account = await db.get_sauth_account_by_username(account_username)
+        if account:
+            await db.update_sauth_account_refresh(
+                account["id"], uid, sauth_str
+            )
+
+        await self._log_refresh(
+            db, success=True,
+            message=(
+                f"sauth_json 刷新成功 (账号: {account_username}, "
+                f"uid: {uid})"
+            ),
+            username=account_username,
+            details={"uid": uid},
+        )
+        return sauth_str
+
+    async def _refresh_via_mpay(
+        self, username: str, password: str
+    ) -> tuple[Optional[str], str]:
+        """非 OAuth2 流程: 登录获取 MPay SDK token, 再通过 fever_to_sauth 转换。
+
+        此流程产生的 MPay token 可直接用于 fever_to_sauth, 换取 netease 频道
+        sauth_json, 解决 4399com/4399pc 频道 code=32 问题。
+        若 fever_to_sauth 失败, 回退到 4399pc 频道 sauth_json。
+
+        Returns:
+            (sauth_json, uid) 或 (None, "")
+        """
+        from ..netease_direct.login_4399 import (
+            login_4399_to_sauth,
+            fetch_captcha as _fetch_captcha_4399,
+            generate_captcha_id as _gen_captcha_id_4399,
+            _generate_deviceid,
+        )
+        from ..netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
+        from ..netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
+
+        # Step 1: 非 OAuth2 登录 (可能需要验证码)
+        result = await login_4399_to_sauth(username, password)
+
+        # 需要验证码时自动 OCR 重试
+        if not result.get("success") and result.get("need_captcha"):
+            captcha_id = result.get("captcha_id") or _gen_captcha_id_4399()
+            for _attempt in range(10):
+                captcha_image = await _fetch_captcha_4399(captcha_id)
+                captcha_answer = await _ocr_captcha(captcha_image)
+                if captcha_answer and len(captcha_answer) >= 4:
+                    result = await login_4399_to_sauth(
+                        username, password,
+                        captcha_answer=captcha_answer,
+                        captcha_id=captcha_id,
+                    )
+                    if result.get("success") or not result.get("need_captcha"):
+                        break
+                captcha_id = _gen_captcha_id_4399()
+
+        if not result.get("success"):
+            logger.warning(
+                f"非 OAuth2 登录失败: {result.get('message', '')}"
+            )
+            return None, ""
+
+        # Step 2: 使用 MPay token 通过 fever_to_sauth 转换为 netease 频道
+        sauth_str = result["sauth_json"]  # 4399pc 频道 (回退用)
+        data = result.get("data", {})
+        mpay_token = data.get("token", "")
+        mpay_sdkuid = data.get("sdkuid", "")
+        deviceid = data.get("deviceid", "") or _generate_deviceid()
+
+        if mpay_token and mpay_sdkuid:
+            try:
+                convert_result = await _fever_to_sauth(
+                    sdkuid=mpay_sdkuid,
+                    sessionid=mpay_token,
+                    deviceid=deviceid,
+                )
+                if convert_result.get("success"):
+                    sauth_str = convert_result["sauth_json"]
+                    logger.info(
+                        f"fever_to_sauth 转换成功, "
+                        f"已切换到 netease 频道 (账号: {username})"
+                    )
+                else:
+                    logger.warning(
+                        f"fever_to_sauth 转换失败: "
+                        f"{convert_result.get('message', '')}, "
+                        f"回退到 4399pc 频道"
+                    )
+            except Exception as convert_err:  # noqa: BLE001
+                logger.warning(
+                    f"fever_to_sauth 异常: {convert_err}, "
+                    f"回退到 4399pc 频道"
+                )
+        else:
+            logger.warning("未获取到 MPay token, 使用 4399pc 频道")
+
+        return sauth_str, mpay_sdkuid
+
+    async def _refresh_via_oauth2(
+        self, username: str, password: str
+    ) -> tuple[Optional[str], str]:
+        """OAuth2 流程 (回退方案): 构建 4399com 频道 sauth_json。
+
+        注意: 4399com 频道在 /login-otp 认证时可能返回 code=32。
+
+        Returns:
+            (sauth_json, uid) 或 (None, "")
+        """
         client = Login4399OAuth2()
         try:
-            result = await client.login(account_username, account_password)
+            result = await client.login(username, password)
             if result is None:
-                logger.error(f"4399 登录失败 (账号: {account_username})")
-                await self._log_refresh(
-                    db, success=False,
-                    message=f"4399 登录失败 (账号: {account_username})",
-                    username=account_username,
-                )
-                return None
+                return None, ""
 
-            # Step 1: 使用 build_sauth_json 构建 4399com 频道 sauth_json
             sauth_dict = build_sauth_json(result.uid, result.sessionid)
             sauth_str = json.dumps(
                 {"sauth_json": json.dumps(sauth_dict, ensure_ascii=False)},
                 ensure_ascii=False,
             )
-
-            # Step 2: 尝试通过 fever_to_sauth 转换为 netease 频道 sauth_json
-            # 4399com 频道的 sauth_json 在 /login-otp 认证时可能返回 code=32,
-            # 需要通过 MPay create_ticket + login/ticket 流程换取
-            # netease 频道的新 sessionid, 才能通过网易认证。
-            # 注意: 此步骤失败不影响主流程, 回退到 4399com 频道。
-            try:
-                from ..netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
-
-                deviceid = sauth_dict.get("deviceid", "") or "4399FuckYou"
-                convert_result = await _fever_to_sauth(
-                    sdkuid=result.uid,
-                    sessionid=result.sessionid,
-                    deviceid=deviceid,
-                )
-
-                if convert_result.get("success"):
-                    sauth_str = convert_result["sauth_json"]
-                    logger.info(
-                        f"fever_to_sauth 转换成功 (账号: {account_username}), "
-                        f"已转换为 netease 频道"
-                    )
-                else:
-                    logger.warning(
-                        f"fever_to_sauth 转换失败: {convert_result.get('message', '')}, "
-                        f"回退到 4399com 频道 (可能遇到 code=32)"
-                    )
-            except Exception as convert_err:
-                logger.warning(
-                    f"fever_to_sauth 异常 (不影响刷新): {convert_err}, "
-                    f"回退到 4399com 频道"
-                )
-
-            # 更新账号记录: uid / sauth_json / last_refresh_at, 恢复 active
-            account = await db.get_sauth_account_by_username(account_username)
-            if account:
-                await db.update_sauth_account_refresh(
-                    account["id"], result.uid, sauth_str
-                )
-
-            await self._log_refresh(
-                db, success=True,
-                message=(
-                    f"sauth_json 刷新成功 (账号: {account_username}, "
-                    f"uid: {result.uid})"
-                ),
-                username=account_username,
-                details={"uid": result.uid},
-            )
-            return sauth_str
-
-        except Exception as e:  # noqa: BLE001
-            logger.exception(
-                f"刷新 sauth_json 异常 (账号: {account_username}): {e}"
-            )
-            await self._log_refresh(
-                db, success=False,
-                message=(
-                    f"刷新 sauth_json 异常 (账号: {account_username}): {e}"
-                ),
-                username=account_username,
-            )
-            return None
+            return sauth_str, result.uid
         finally:
             try:
                 await client.close()
