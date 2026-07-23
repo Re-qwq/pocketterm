@@ -477,12 +477,12 @@ class SauthRefresher:
                     rand_time = rt_match.group(1)
 
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
-                # gameUrl 保持空字符串 (与原始 login_4399.py 一致)
-                # BUG FIX: httpx cookie jar 可能不正确匹配 Domain=4399.com 的 cookies
-                # 到 ptlogin.4399.com 子域名, 手动提取 cookies 设置到请求头
+                # gameUrl 必须设置 (空值返回 "no protocol" 错误)
+                from urllib.parse import quote as _url_quote
                 check_url = (
                     f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
-                    f"&gameUrl=&rand_time={rand_time}"
+                    f"&gameUrl={_url_quote(SDK_INFO_URL, safe='')}"
+                    f"&rand_time={rand_time}"
                 )
 
                 # 手动构建 Cookie 头, 确保 cookies 被正确发送
