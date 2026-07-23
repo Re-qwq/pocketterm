@@ -651,9 +651,9 @@ async def list_users(request: Request):
                 "expire_at": u["expire_at"],
                 "created_by": u["created_by"],
                 "must_change_password": bool(u["must_change_password"]),
-                "balance": u.get("balance", 0),
-                "email": u.get("email", ""),
-                "avatar": u.get("avatar", ""),
+                "balance": u["balance"] if "balance" in u.keys() else 0,
+                "email": u["email"] if "email" in u.keys() else "",
+                "avatar": u["avatar"] if "avatar" in u.keys() else "",
             }
             for u in users
         ],
