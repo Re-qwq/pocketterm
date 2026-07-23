@@ -297,14 +297,14 @@ class SauthRefresher:
         Returns:
             (sauth_json, uid) 或 (None, "")
         """
-        from ..netease_direct.login_4399 import (
+        from .netease_direct.login_4399 import (
             login_4399_to_sauth,
             fetch_captcha as _fetch_captcha_4399,
             generate_captcha_id as _gen_captcha_id_4399,
             _generate_deviceid,
         )
-        from ..netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
-        from ..netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
+        from .netease_direct.login_4399_oauth2 import ocr_captcha as _ocr_captcha
+        from .netease_direct.fever_to_sauth import fever_to_sauth as _fever_to_sauth
 
         # Step 1: 非 OAuth2 登录 (可能需要验证码)
         result = await login_4399_to_sauth(username, password)
