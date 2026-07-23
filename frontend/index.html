@@ -2633,6 +2633,67 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 </div>
             </div>
 
+            <!-- 4399 账号池管理 -->
+            <div class="card" style="margin-top:20px;">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-users"></i> 4399 账号池管理</div>
+                    <span class="badge badge-warning" id="sauthPoolBadge">0 个账号</span>
+                </div>
+                <div class="card-body">
+                    <div style="display:flex;flex-direction:column;gap:16px;">
+                        <!-- 添加账号表单 -->
+                        <div style="padding:16px;background:var(--bg-input);border-radius:var(--radius-md);">
+                            <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-primary);">
+                                <i class="fas fa-plus-circle"></i> 添加 4399 账号
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;">
+                                <div>
+                                    <label class="form-label" style="font-size:12px;">4399 用户名</label>
+                                    <input type="text" class="form-input" id="sauthAddUser" placeholder="4399用户名" style="font-size:13px;">
+                                </div>
+                                <div>
+                                    <label class="form-label" style="font-size:12px;">4399 密码</label>
+                                    <input type="password" class="form-input" id="sauthAddPass" placeholder="4399密码" style="font-size:13px;">
+                                </div>
+                                <button class="btn btn-primary" id="sauthAddBtn" style="height:38px;">
+                                    <i class="fas fa-plus"></i> 添加
+                                </button>
+                            </div>
+                            <div style="font-size:11px;color:var(--text-tertiary);margin-top:8px;">
+                                <i class="fas fa-info-circle"></i> 添加真实4399账号后, 系统会自动登录获取sauth_json, 机器人连接时自动使用
+                            </div>
+                        </div>
+
+                        <!-- 账号列表 -->
+                        <div id="sauthAccountsList" style="display:flex;flex-direction:column;gap:8px;">
+                            <div class="empty-state" style="padding:20px;">
+                                <i class="fas fa-users-slash" style="color:var(--text-tertiary);"></i>
+                                <p style="font-size:13px;margin-top:4px;">暂无4399账号, 请先添加</p>
+                            </div>
+                        </div>
+
+                        <!-- 刷新按钮 -->
+                        <div style="display:flex;gap:8px;">
+                            <button class="btn btn-success btn-block" id="sauthRefreshBtn">
+                                <i class="fas fa-sync-alt"></i> 手动刷新 sauth_json
+                            </button>
+                        </div>
+
+                        <!-- 刷新状态 -->
+                        <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);">
+                            <div style="font-size:12px;color:var(--text-secondary);display:flex;justify-content:space-between;">
+                                <span>缓存状态</span>
+                                <span id="sauthCacheStatus" style="font-weight:600;">未缓存</span>
+                            </div>
+                            <div style="font-size:12px;color:var(--text-secondary);display:flex;justify-content:space-between;margin-top:4px;">
+                                <span>活跃/失败/禁用</span>
+                                <span id="sauthAccountStats" style="font-weight:600;">0 / 0 / 0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- 详细统计 -->
             <div class="card" style="margin-top:20px;">
                 <div class="card-header">

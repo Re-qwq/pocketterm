@@ -3126,7 +3126,163 @@
 
     /** 加载系统管理页面数据 */
     async function loadSystemAdmin() {
-        await Promise.allSettled([loadNV1Status(), loadBanStatus(), loadSystemStatsDetail()]);
+        await Promise.allSettled([
+            loadNV1Status(), loadBanStatus(), loadSystemStatsDetail(),
+            loadSauthAccounts(), loadSauthStatus(),
+        ]);
+    }
+
+    // ---- 4399 账号池管理 ----
+
+    async function loadSauthAccounts() {
+        try {
+            const res = await api("/sauth/accounts");
+            const list = $("sauthAccountsList");
+            const badge = $("sauthPoolBadge");
+            if (res.success && res.data) {
+                const accounts = res.data;
+                badge.textContent = accounts.length + " 个账号";
+                if (accounts.length === 0) {
+                    list.innerHTML = `
+                        <div class="empty-state" style="padding:20px;">
+                            <i class="fas fa-users-slash" style="color:var(--text-tertiary);"></i>
+                            <p style="font-size:13px;margin-top:4px;">暂无4399账号, 请先添加</p>
+                        </div>`;
+                    return;
+                }
+                list.innerHTML = accounts.map((acc) => {
+                    const statusColor = acc.status === "active" ? "var(--color-success)"
+                        : acc.status === "failed" ? "var(--color-danger)"
+                        : "var(--text-tertiary)";
+                    const statusText = acc.status === "active" ? "正常"
+                        : acc.status === "failed" ? "失败"
+                        : "禁用";
+                    const lastRefresh = acc.last_refresh_at
+                        ? new Date(acc.last_refresh_at * 1000).toLocaleString("zh-CN")
+                        : "从未刷新";
+                    return `
+                        <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <div style="font-weight:600;font-size:13px;">${escapeHtml(acc.username)}</div>
+                                <div style="font-size:11px;color:var(--text-tertiary);">
+                                    UID: ${escapeHtml(acc.uid || "未知")} | ${escapeHtml(lastRefresh)}
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                <span style="font-size:11px;font-weight:600;color:${statusColor};">${statusText}</span>
+                                <button class="btn btn-ghost btn-sm sauth-test-btn" data-id="${escapeHtml(acc.id)}" style="padding:2px 8px;font-size:11px;">
+                                    <i class="fas fa-vial"></i> 测试
+                                </button>
+                                <button class="btn btn-ghost btn-sm sauth-del-btn" data-id="${escapeHtml(acc.id)}" style="padding:2px 8px;font-size:11px;color:var(--color-danger);">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>`;
+                }).join("");
+                list.querySelectorAll(".sauth-test-btn").forEach((btn) => {
+                    btn.addEventListener("click", () => handleSauthTest(btn.getAttribute("data-id")));
+                });
+                list.querySelectorAll(".sauth-del-btn").forEach((btn) => {
+                    btn.addEventListener("click", () => handleSauthDelete(btn.getAttribute("data-id")));
+                });
+            }
+        } catch (e) {
+            console.error("加载4399账号列表失败:", e);
+        }
+    }
+
+    async function loadSauthStatus() {
+        try {
+            const res = await api("/sauth/status");
+            if (res.success && res.data) {
+                const d = res.data;
+                const cacheEl = $("sauthCacheStatus");
+                if (d.is_valid) {
+                    const ageMin = d.cached_age_seconds ? Math.floor(d.cached_age_seconds / 60) : 0;
+                    cacheEl.textContent = `已缓存 (${ageMin}分钟前)`;
+                    cacheEl.style.color = "var(--color-success)";
+                } else {
+                    cacheEl.textContent = d.cached ? "已过期" : "未缓存";
+                    cacheEl.style.color = "var(--text-tertiary)";
+                }
+                const acc = d.accounts || {};
+                $("sauthAccountStats").textContent =
+                    `${acc.active || 0} / ${acc.failed || 0} / ${acc.disabled || 0}`;
+            }
+        } catch (e) {
+            console.error("加载sauth状态失败:", e);
+        }
+    }
+
+    async function handleSauthAdd() {
+        const username = $("sauthAddUser").value.trim();
+        const password = $("sauthAddPass").value.trim();
+        if (!username || !password) {
+            toastError("请填写4399用户名和密码");
+            return;
+        }
+        try {
+            const res = await api("/sauth/accounts", {
+                method: "POST",
+                body: JSON.stringify({ username, password }),
+            });
+            if (res.success) {
+                toastSuccess(res.message || "4399账号添加成功");
+                $("sauthAddUser").value = "";
+                $("sauthAddPass").value = "";
+                await loadSauthAccounts();
+                await loadSauthStatus();
+            } else {
+                toastError("添加失败: " + (res.error || res.message || res.detail || "未知错误"));
+            }
+        } catch (e) {
+            toastError("添加失败: " + e.message);
+        }
+    }
+
+    async function handleSauthDelete(accountId) {
+        if (!confirm("确定删除此4399账号?")) return;
+        try {
+            const res = await api("/sauth/accounts/" + accountId, { method: "DELETE" });
+            if (res.success) {
+                toastSuccess("账号已删除");
+                await loadSauthAccounts();
+                await loadSauthStatus();
+            } else {
+                toastError("删除失败: " + (res.error || res.message || res.detail || "未知错误"));
+            }
+        } catch (e) {
+            toastError("删除失败: " + e.message);
+        }
+    }
+
+    async function handleSauthTest(accountId) {
+        toastInfo("正在测试4399账号登录...");
+        try {
+            const res = await api("/sauth/accounts/" + accountId + "/test", { method: "POST" });
+            if (res.success) {
+                toastSuccess("测试成功: " + (res.data?.message || "登录正常"));
+            } else {
+                toastError("测试失败: " + (res.data?.message || res.error || res.detail || "未知错误"));
+            }
+        } catch (e) {
+            toastError("测试失败: " + e.message);
+        }
+    }
+
+    async function handleSauthRefresh() {
+        toastInfo("正在刷新sauth_json...");
+        try {
+            const res = await api("/sauth/refresh", { method: "POST" });
+            if (res.success) {
+                toastSuccess("sauth_json刷新成功");
+                await loadSauthStatus();
+            } else {
+                toastError("刷新失败: " + (res.error || res.message || res.detail || "无可用4399账号"));
+            }
+        } catch (e) {
+            toastError("刷新失败: " + e.message);
+        }
     }
 
     /** 加载 nv1 SAuth Key 状态 */
@@ -4324,6 +4480,10 @@
         $("nv1RefreshBtn").addEventListener("click", handleNV1Refresh);
         $("nv1SetKeyBtn").addEventListener("click", handleNV1SetKey);
         $("nv1SetNbBtn").addEventListener("click", handleNV1SetNovaBuilder);
+
+        // ---- 4399 账号池 ----
+        $("sauthAddBtn") && $("sauthAddBtn").addEventListener("click", handleSauthAdd);
+        $("sauthRefreshBtn") && $("sauthRefreshBtn").addEventListener("click", handleSauthRefresh);
 
         // ---- 公告 ----
         $("annCreateBtn").addEventListener("click", () => openModal("modalCreateAnnouncement"));
