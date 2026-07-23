@@ -628,12 +628,18 @@ class SauthRefresher:
                     "User-Agent": "WPFLauncher/0.0.0.0",
                     "Content-Type": "application/json",
                 }
-                # 使用已有 client (带 4399 登录 cookies) 调用 uni_sauth
-                _uni_resp = await client.post(
-                    _UNI_SAUTH_URL,
-                    content=_sauth_inner_str.encode("utf-8"),
-                    headers=_uni_headers,
-                )
+                # 提取 cookies 到新客户端 (避免 Origin/Referer 头干扰 uni_sauth)
+                _uni_cookies = dict(client.cookies)
+                self._last_refresh_debug["mpay_flow"]["uni_cookie_count"] = len(_uni_cookies)
+                self._last_refresh_debug["mpay_flow"]["uni_cookie_names"] = list(_uni_cookies.keys())
+                async with httpx.AsyncClient(
+                    timeout=15, verify=False, cookies=_uni_cookies
+                ) as _uni_client:
+                    _uni_resp = await _uni_client.post(
+                        _UNI_SAUTH_URL,
+                        content=_sauth_inner_str.encode("utf-8"),
+                        headers=_uni_headers,
+                    )
                 try:
                     _uni_data = _uni_resp.json()
                 except Exception:
