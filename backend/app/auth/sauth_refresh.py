@@ -477,10 +477,12 @@ class SauthRefresher:
                 )
 
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
-                # 尝试两种方式: 不跟随重定向 + 跟随重定向
+                # gameUrl 必须设置, 否则返回 "no protocol" 错误
+                from urllib.parse import quote as _url_quote
                 check_url = (
                     f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
-                    f"&gameUrl=&rand_time={rand_time}"
+                    f"&gameUrl={_url_quote(SDK_INFO_URL, safe='')}"
+                    f"&rand_time={rand_time}"
                 )
                 resp2 = await client.get(check_url, follow_redirects=False)
 
