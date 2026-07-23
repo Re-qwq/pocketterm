@@ -477,6 +477,7 @@ class SauthRefresher:
                 )
 
                 # Step 5: checkKidLoginUserCookie → sig/uid/time/validateState
+                # 尝试两种方式: 不跟随重定向 + 跟随重定向
                 check_url = (
                     f"{CHECK_COOKIE_URL}?appId=kid_wdsj"
                     f"&gameUrl=&rand_time={rand_time}"
@@ -497,8 +498,9 @@ class SauthRefresher:
                 else:
                     redirect_url = resp2.text
 
-                self._last_refresh_debug["mpay_flow"]["check_redirect_500"] = (
-                    redirect_url[:500]
+                # 捕获更多响应内容 (3000 chars) 用于分析
+                self._last_refresh_debug["mpay_flow"]["check_redirect_3000"] = (
+                    redirect_url[:3000]
                 )
 
                 # FIX: 使用 redirect_url (之前误用 redirect_text)
@@ -525,56 +527,73 @@ class SauthRefresher:
                         "no_sig_trying_alternatives"
                     )
 
-                    # 替代方案: checkKidLoginUserCookie 返回 JS 页面,
-                    # 无法获取 sig。尝试用已有 cookies 直接调用 sdk/info。
-
-                    # 从 Pauth cookie 提取 uid
+                    # 从 cookies 提取各种 hash 值尝试作为 sig
                     pauth = client.cookies.get("Pauth", "")
                     pauth_parts = pauth.split("|") if pauth else []
                     ck_uid = pauth_parts[0] if len(pauth_parts) > 0 else ""
                     pauth_token = pauth_parts[2] if len(pauth_parts) > 2 else ""
-                    self._last_refresh_debug["mpay_flow"]["pauth_uid"] = ck_uid
-                    self._last_refresh_debug["mpay_flow"]["pauth_token_len"] = (
-                        len(pauth_token)
-                    )
+                    pauth_time = pauth_parts[3] if len(pauth_parts) > 3 else ""
+                    pauth_hash = pauth_parts[5] if len(pauth_parts) > 5 else ""
 
-                    # 方案 1: 直接用 cookies 调用 sdk/info (无 sig)
-                    try:
-                        alt_query = _SDK_QUERY.format(
-                            game_id="500352",
-                            sig="",
-                            uid=ck_uid,
-                            time="",
-                            validateState="",
-                            username=username,
-                        )
-                        alt_sdk_url = (
-                            f"{SDK_INFO_URL}?callback=&queryStr={alt_query}"
-                        )
-                        resp_alt = await client.get(alt_sdk_url)
-                        alt_text = resp_alt.text.strip()
-                        if alt_text.startswith("(") and alt_text.endswith(")"):
-                            alt_text = alt_text[1:-1]
-                        elif "(" in alt_text and alt_text.endswith(")"):
-                            inner_start = alt_text.find("(")
-                            if inner_start != -1:
-                                alt_text = alt_text[inner_start + 1:-1]
-                        alt_data = json.loads(alt_text) if alt_text else {}
-                        alt_login_data = alt_data.get("sdk_login_data", {})
-                        alt_token = alt_login_data.get("token", "")
-                        self._last_refresh_debug["mpay_flow"]["alt_sdk_resp"] = (
-                            str(alt_data)[:300]
-                        )
-                        if alt_token:
-                            mpay_token = alt_token
-                            mpay_sdkuid = alt_login_data.get("sdkuid", ck_uid)
-                            self._last_refresh_debug["mpay_flow"]["alt"] = (
-                                "sdk_info_direct"
+                    uauth = client.cookies.get("Uauth", "")
+                    uauth_parts = uauth.split("|") if uauth else []
+                    uauth_hash = uauth_parts[5] if len(uauth_parts) > 5 else ""
+
+                    xauth = client.cookies.get("Xauth", "")
+
+                    self._last_refresh_debug["mpay_flow"]["pauth_uid"] = ck_uid
+                    self._last_refresh_debug["mpay_flow"]["pauth_hash"] = pauth_hash[:20]
+                    self._last_refresh_debug["mpay_flow"]["uauth_hash"] = uauth_hash[:20]
+                    self._last_refresh_debug["mpay_flow"]["xauth"] = xauth[:20]
+
+                    # 尝试多种 sig 值调用 sdk/info
+                    sig_candidates = [
+                        ("uauth_hash", uauth_hash, pauth_time or rand_time, pauth_hash or xauth),
+                        ("pauth_hash", pauth_hash, pauth_time or rand_time, uauth_hash or xauth),
+                        ("xauth", xauth, pauth_time or rand_time, pauth_hash or uauth_hash),
+                        ("pauth_token", pauth_token, pauth_time or rand_time, pauth_hash or uauth_hash),
+                    ]
+
+                    for sig_name, sig_val, time_val, state_val in sig_candidates:
+                        if not sig_val:
+                            continue
+                        try:
+                            alt_query = _SDK_QUERY.format(
+                                game_id="500352",
+                                sig=sig_val,
+                                uid=ck_uid,
+                                time=time_val,
+                                validateState=state_val,
+                                username=username,
                             )
-                    except Exception as alt_e:
-                        self._last_refresh_debug["mpay_flow"]["alt_sdk_err"] = (
-                            str(alt_e)
-                        )
+                            alt_sdk_url = (
+                                f"{SDK_INFO_URL}?callback=&queryStr={alt_query}"
+                            )
+                            resp_alt = await client.get(alt_sdk_url)
+                            alt_text = resp_alt.text.strip()
+                            if alt_text.startswith("(") and alt_text.endswith(")"):
+                                alt_text = alt_text[1:-1]
+                            elif "(" in alt_text and alt_text.endswith(")"):
+                                inner_start = alt_text.find("(")
+                                if inner_start != -1:
+                                    alt_text = alt_text[inner_start + 1:-1]
+                            alt_data = json.loads(alt_text) if alt_text else {}
+                            alt_login_data = alt_data.get("sdk_login_data", {})
+                            alt_token = alt_login_data.get("token", "")
+                            self._last_refresh_debug["mpay_flow"][f"alt_{sig_name}_resp"] = (
+                                str(alt_data)[:200]
+                            )
+                            if alt_token:
+                                mpay_token = alt_token
+                                mpay_sdkuid = alt_login_data.get("sdkuid", ck_uid)
+                                self._last_refresh_debug["mpay_flow"]["alt"] = (
+                                    f"sdk_info_{sig_name}"
+                                )
+                                break
+                        except Exception as alt_e:
+                            self._last_refresh_debug["mpay_flow"][f"alt_{sig_name}_err"] = (
+                                str(alt_e)[:100]
+                            )
 
                     # 方案 2: 用 Pauth token 直接尝试 fever_to_sauth
                     if not mpay_token and pauth_token:
