@@ -1,12 +1,10 @@
-"""用户认证 API - 注册、登录、卡密验证、邮箱验证。"""
+"""用户认证 API - 注册、登录、卡密验证。"""
 from __future__ import annotations
 
 import logging
 import os
 import re
-import secrets
 import time
-import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -40,8 +38,6 @@ class RegisterRequest(BaseModel):
     card_key: str = Field(..., description="注册卡密")
     captcha_answer: str = Field(..., description="图形验证码答案")
     captcha_id: str = Field(..., description="验证码 ID")
-    email: str = Field("", description="邮箱 (可选，QQ邮箱: @qq.com / @foxmail.com)")
-    email_code: str = Field("", description="邮箱验证码 (填写邮箱时必填)")
 
 
 class LoginRequest(BaseModel):
@@ -60,221 +56,6 @@ class CreateUserRequest(BaseModel):
     role: str = Field("user", description="角色: user/admin")
     duration_days: Optional[int] = Field(None, description="有效期天数，None=永久")
     email: str = Field("", description="邮箱 (可选，管理员创建无需验证)")
-
-
-class SendEmailCodeRequest(BaseModel):
-    email: str = Field(..., description="QQ邮箱 (@qq.com / @foxmail.com)")
-
-
-class VerifyEmailCodeRequest(BaseModel):
-    email: str = Field(..., description="邮箱")
-    code: str = Field(..., description="验证码")
-
-
-# ============================================================================
-# 邮箱相关辅助函数
-# ============================================================================
-
-#: QQ 邮箱后缀
-_QQ_EMAIL_SUFFIXES = ("@qq.com", "@foxmail.com")
-
-#: 邮箱验证码有效期 (秒)
-EMAIL_CODE_EXPIRE_SECONDS = 5 * 60
-
-
-def _is_qq_email(email: str) -> bool:
-    """判断是否为 QQ 邮箱 (@qq.com / @foxmail.com)。"""
-    if not email:
-        return False
-    email_lower = email.strip().lower()
-    return email_lower.endswith(_QQ_EMAIL_SUFFIXES)
-
-
-def _extract_qq_number(email: str) -> Optional[str]:
-    """从 QQ 邮箱中提取 QQ 号 (如 12345@qq.com -> 12345)。"""
-    if not _is_qq_email(email):
-        return None
-    email_lower = email.strip().lower()
-    for suffix in _QQ_EMAIL_SUFFIXES:
-        if email_lower.endswith(suffix):
-            number = email_lower[: -len(suffix)]
-            if number.isdigit():
-                return number
-    return None
-
-
-def _qq_avatar(email: str) -> str:
-    """根据 QQ 邮箱生成 QQ 头像 URL。"""
-    number = _extract_qq_number(email)
-    if number:
-        return f"https://q1.qlogo.cn/g?b=qq&nk={number}&s=100"
-    return ""
-
-
-def _send_email_resend(to_email: str, subject: str, body: str) -> bool:
-    """通过 Resend HTTP API 发送邮件。
-
-    适用于 Railway 等 PaaS 平台 (阻止出站 SMTP 端口)。
-    需要环境变量 RESEND_API_KEY。
-    发件人默认 onboarding@resend.dev (免费层) 或 RESEND_FROM。
-
-    Resend 免费层: 3000 封/月, 无需域名验证即可使用 onboarding@resend.dev。
-    """
-    api_key = os.environ.get("RESEND_API_KEY", "").strip()
-    if not api_key:
-        return False
-
-    sender = os.environ.get("RESEND_FROM", "PocketTerm <onboarding@resend.dev>").strip()
-
-    try:
-        import httpx
-
-        # BUG 修复: 之前使用 httpx.post (同步), 会阻塞 asyncio 事件循环
-        # 导致前端等待 10+ 秒。改为在单独线程中执行同步请求。
-        # 同步 httpx.post 的超时设为 8 秒 (之前无超时, 默认 30 秒)
-        resp = httpx.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "from": sender,
-                "to": [to_email],
-                "subject": subject,
-                "text": body,
-            },
-            timeout=8.0,  # 从 15 秒降到 8 秒
-        )
-        if resp.status_code in (200, 201):
-            logger.info("Resend 邮件发送成功: %s", to_email)
-            return True
-        logger.error(
-            "Resend 邮件发送失败: status=%s, body=%s",
-            resp.status_code,
-            resp.text[:200],
-        )
-        return False
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Resend 邮件发送异常 (%s): %s", to_email, exc)
-        return False
-
-
-def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
-    """通过 SMTP 发送邮件 (本地开发或非 Railway 部署使用)。
-
-    SMTP 配置从环境变量读取::
-
-        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
-
-    注意: Railway 等 PaaS 平台会阻止出站 SMTP 端口 (25/465/587),
-    请改用 _send_email_resend (Resend HTTP API)。
-    """
-    host = os.environ.get("SMTP_HOST", "").strip()
-    port = int(os.environ.get("SMTP_PORT", "465"))
-    user = os.environ.get("SMTP_USER", "").strip()
-    password = os.environ.get("SMTP_PASS", "").strip()
-    # SMTP_USER 未设置时回退到 SMTP_FROM (QQ 邮箱 SMTP 用户名即邮箱地址)
-    if not user:
-        user = os.environ.get("SMTP_FROM", "").strip()
-    sender = os.environ.get("SMTP_FROM", "").strip() or user
-
-    if not host or not user or not password:
-        logger.warning(
-            "SMTP 未配置 (SMTP_HOST/SMTP_USER/SMTP_PASS)，跳过邮件发送: %s",
-            to_email,
-        )
-        return False
-
-    try:
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-
-        msg = MIMEMultipart()
-        msg["From"] = sender
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-
-        # 465 -> SMTP_SSL，其他端口 -> SMTP + STARTTLS
-        if port == 465:
-            with smtplib.SMTP_SSL(host, port, timeout=15) as server:
-                server.login(user, password)
-                server.sendmail(sender, [to_email], msg.as_string())
-        else:
-            with smtplib.SMTP(host, port, timeout=15) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(user, password)
-                server.sendmail(sender, [to_email], msg.as_string())
-        logger.info("邮件发送成功: %s", to_email)
-        return True
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("邮件发送失败 (%s): %s", to_email, exc)
-        return False
-
-
-def _send_email(to_email: str, subject: str, body: str) -> bool:
-    """发送邮件，优先使用 Resend HTTP API，回退到 SMTP。
-
-    发送优先级:
-        1. Resend HTTP API (RESEND_API_KEY) — 适用于 Railway 等阻止 SMTP 的平台
-        2. SMTP (SMTP_HOST/SMTP_USER/SMTP_PASS) — 适用于本地或 VPS 部署
-    """
-    # 1. 尝试 Resend API
-    if _send_email_resend(to_email, subject, body):
-        return True
-    # 2. 回退到 SMTP
-    if _send_email_smtp(to_email, subject, body):
-        return True
-    return False
-
-
-async def _send_email_async(to_email: str, subject: str, body: str) -> bool:
-    """异步发送邮件，优先使用 Resend HTTP API，回退到 SMTP。
-
-    与 _send_email 功能相同，但 Resend 部分使用 httpx.AsyncClient (真正的异步),
-    SMTP 部分仍需在线程池中执行 (smtplib 是同步库)。
-    """
-    # 1. 尝试 Resend API (异步)
-    api_key = os.environ.get("RESEND_API_KEY", "").strip()
-    if api_key:
-        sender = os.environ.get(
-            "RESEND_FROM", "PocketTerm <onboarding@resend.dev>"
-        ).strip()
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    "https://api.resend.com/emails",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "from": sender,
-                        "to": [to_email],
-                        "subject": subject,
-                        "text": body,
-                    },
-                )
-                if resp.status_code in (200, 201):
-                    logger.info("Resend 邮件发送成功 (async): %s", to_email)
-                    return True
-                logger.error(
-                    "Resend 邮件发送失败 (async): status=%s, body=%s",
-                    resp.status_code, resp.text[:200],
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Resend 邮件发送异常 (async, %s): %s", to_email, exc)
-
-    # 2. 回退到 SMTP (在线程池中执行)
-    import asyncio
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, _send_email_smtp, to_email, subject, body
-    )
 
 
 # ============================================================================
@@ -311,60 +92,34 @@ async def register(req: RegisterRequest, request: Request):
     if existing:
         raise HTTPException(status_code=400, detail="用户名已存在")
 
-    # 3b. 邮箱验证 (可选)
-    email = ""
-    avatar = ""
-    if req.email and req.email.strip():
-        email = req.email.strip().lower()
-        # 校验 QQ 邮箱格式
-        if not _is_qq_email(email):
-            raise HTTPException(
-                status_code=400,
-                detail="邮箱格式不正确，仅支持 @qq.com 或 @foxmail.com 邮箱",
-            )
-        # 检查邮箱是否已被注册
-        email_row = await (await db.conn.execute(
-            "SELECT user_id FROM users WHERE email = ? AND email != ''", (email,)
-        )).fetchone()
-        if email_row:
-            raise HTTPException(status_code=400, detail="该邮箱已被注册")
-        # 校验邮箱验证码
-        if not req.email_code:
-            raise HTTPException(status_code=400, detail="请填写邮箱验证码")
-        code_row = await (await db.conn.execute(
-            "SELECT * FROM email_verifications WHERE email = ? AND code = ? "
-            "AND used = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
-            (email, req.email_code.strip(), time.time()),
-        )).fetchone()
-        if code_row is None:
-            raise HTTPException(status_code=400, detail="邮箱验证码错误或已过期")
-        # 标记验证码已使用
-        await db.conn.execute(
-            "UPDATE email_verifications SET used = 1 WHERE id = ?",
-            (code_row["id"],),
-        )
-        await db.conn.commit()
-        # 生成 QQ 头像
-        avatar = _qq_avatar(email)
-
     # 4. 计算过期时间
     expire_at = None
     if card["duration_days"]:
         expire_at = time.time() + card["duration_days"] * 86400
 
-    # 5. 创建用户 (写入 email / avatar)
+    # 5. 创建用户 (邮箱验证已移除, email/avatar 留空)
     user_id = await db.create_user(
         username=req.username,
         password_hash=hash_password(req.password),
         role="user",
         created_by=card["card_id"],
         expire_at=expire_at,
-        email=email,
-        avatar=avatar,
+        email="",
+        avatar="",
     )
 
-    # 6. 标记卡密已使用
-    await db.use_card(card["card_id"], user_id=user_id)
+    # 6. 标记卡密已使用 (失败则回滚用户创建)
+    try:
+        await db.use_card(card["card_id"], user_id=user_id)
+    except Exception as e:
+        # 卡密标记失败, 删除已创建的用户以防卡密被重复使用
+        logger.error(f"标记卡密失败, 回滚用户创建: {e}")
+        try:
+            await db.conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+            await db.conn.commit()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="注册失败: 卡密标记异常, 请联系管理员")
 
     # 7. 记录日志
     await db.add_log(
@@ -407,116 +162,6 @@ async def get_captcha_debug(captcha_id: str):
     if entry:
         return {"success": True, "answer": entry["answer"]}
     return {"success": False, "answer": None}
-
-
-# ============================================================================
-# 邮箱验证码
-# ============================================================================
-
-@router.post("/email/send")
-async def send_email_code(req: SendEmailCodeRequest, request: Request):
-    """发送邮箱验证码到 QQ 邮箱。
-
-    流程:
-        1. 校验邮箱格式
-        2. 检查邮箱是否已被注册 (任务要求: 先检查)
-        3. 频率限制 (IP 5次/分钟, 单邮箱 1次/分钟)
-        4. 生成 6 位数字验证码
-        5. 存入 email_verifications 表 (5 分钟有效期)
-        6. 通过 SMTP 发送 (未配置 SMTP 时仅入库，便于开发)
-    """
-    client_ip = request.client.host if request.client else ""
-    email = req.email.strip().lower()
-
-    # 1. 校验邮箱格式
-    if not _is_qq_email(email):
-        raise HTTPException(
-            status_code=400,
-            detail="邮箱格式不正确，仅支持 @qq.com 或 @foxmail.com 邮箱",
-        )
-
-    db = await get_db()
-
-    # 2. 检查邮箱是否已被注册 (任务要求: 先检查)
-    email_row = await (await db.conn.execute(
-        "SELECT user_id FROM users WHERE email = ? AND email != ''", (email,)
-    )).fetchone()
-    if email_row:
-        raise HTTPException(status_code=400, detail="该邮箱已被注册")
-
-    # 3. 频率限制 (IP 5次/分钟, 单邮箱 1次/分钟)
-    if not rate_limiter.check(f"email_send_ip:{client_ip}", max_requests=5, window=60):
-        raise HTTPException(status_code=429, detail="请求过于频繁，请1分钟后再试")
-    if not rate_limiter.check(f"email_send_email:{email}", max_requests=1, window=60):
-        raise HTTPException(status_code=429, detail="该邮箱请求过于频繁，请1分钟后再试")
-
-    # 4. 生成 6 位数字验证码
-    code = f"{secrets.randbelow(1000000):06d}"
-    now = time.time()
-    code_id = f"ev_{uuid.uuid4().hex[:12]}"
-
-    # 5. 写入验证码表
-    await db.conn.execute(
-        """INSERT INTO email_verifications (id, email, code, expires_at, used, created_at)
-           VALUES (?, ?, ?, ?, 0, ?)""",
-        (code_id, email, code, now + EMAIL_CODE_EXPIRE_SECONDS, now),
-    )
-    await db.conn.commit()
-
-    # 6. 发送邮件 (异步执行, 不阻塞响应)
-    # BUG 修复: 之前同步发送邮件 (_send_email) 会阻塞整个事件循环
-    # 导致前端等待 10+ 秒才收到 "已发送" 响应
-    subject = "PocketTerm 邮箱验证码"
-    body = (
-        f"您的 PocketTerm 验证码是: {code}\n\n"
-        f"验证码 5 分钟内有效，请勿泄露给他人。\n"
-        f"如非本人操作，请忽略此邮件。"
-    )
-
-    # 先检查邮件配置是否可用
-    has_resend = bool(os.environ.get("RESEND_API_KEY", "").strip())
-    has_smtp = bool(
-        os.environ.get("SMTP_HOST", "").strip()
-        and os.environ.get("SMTP_USER", "").strip()
-        and os.environ.get("SMTP_PASS", "").strip()
-    )
-
-    if not has_resend and not has_smtp:
-        logger.warning(
-            "邮件未配置 (RESEND_API_KEY 和 SMTP_HOST/USER/PASS 均未设置), "
-            "验证码 %s 仅存入数据库, 不会发送邮件: %s",
-            code, email,
-        )
-        return {
-            "success": True,
-            "message": "邮件服务未配置, 验证码: " + code,
-            "email_sent": False,
-            "code": code,  # 仅在未配置邮件时返回明文验证码 (开发模式)
-        }
-
-    # 在后台异步发送邮件, 不阻塞响应
-    import asyncio
-    asyncio.ensure_future(_send_email_async(email, subject, body))
-
-    return {"success": True, "message": "验证码已发送", "email_sent": True}
-
-
-@router.post("/email/verify")
-async def verify_email_code(req: VerifyEmailCodeRequest, request: Request):
-    """验证邮箱验证码 (不标记为已使用，注册时才标记)。"""
-    email = req.email.strip().lower()
-    code = req.code.strip()
-
-    db = await get_db()
-    row = await (await db.conn.execute(
-        "SELECT * FROM email_verifications WHERE email = ? AND code = ? "
-        "AND used = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
-        (email, code, time.time()),
-    )).fetchone()
-    if row is None:
-        raise HTTPException(status_code=400, detail="验证码错误或已过期")
-
-    return {"success": True, "message": "验证码正确"}
 
 
 # ============================================================================
@@ -822,7 +467,6 @@ async def create_user(req: CreateUserRequest, request: Request):
 
     # 管理员创建的用户无需邮箱验证，但仍可写入邮箱
     admin_email = req.email.strip().lower() if req.email else ""
-    admin_avatar = _qq_avatar(admin_email) if admin_email else ""
 
     user_id = await db.create_user(
         username=req.username,
@@ -831,7 +475,7 @@ async def create_user(req: CreateUserRequest, request: Request):
         created_by=admin["user_id"],
         expire_at=expire_at,
         email=admin_email,
-        avatar=admin_avatar,
+        avatar="",
     )
 
     await db.add_log(

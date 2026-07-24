@@ -25,7 +25,7 @@ from typing import Any, Optional
 
 import aiosqlite
 
-from ..config import DATA_DIR
+from ..config import DATA_DIR, hash_password
 
 logger = logging.getLogger("pocketterm.database")
 
@@ -310,6 +310,9 @@ class Database:
             # -- 初始化默认商店商品 (仅在表为空时插入) -------------------
             await self._init_default_shop_products()
 
+            # -- 初始化默认超级管理员账号 -------------------------------
+            await self._ensure_default_admins()
+
             self._initialized = True
             logger.info("数据库初始化完成: %s", self._db_path)
 
@@ -441,6 +444,38 @@ class Database:
             )
         await self.conn.commit()
         logger.info("已初始化 %d 个默认商店商品", len(defaults))
+
+    async def _ensure_default_admins(self) -> None:
+        """初始化默认超级管理员账号 (仅在账号不存在时创建)。
+
+        创建两个超级管理员::
+
+            - admin / admin123456   (用于测试)
+            - owner / Owner@2026    (用户的超级管理员账号)
+
+        两个账号均为 ``role="superadmin"``、``status="active"``、永不过期
+        (``expire_at=NULL``)。密码使用 :func:`hash_password` 加密。
+        已存在的同名账号不会被覆盖。
+        """
+        default_admins = [
+            ("admin", "admin123456"),
+            ("owner", "Owner@2026"),
+        ]
+        for username, password in default_admins:
+            existing = await self.get_user_by_username(username)
+            if existing is None:
+                user_id = await self.create_user(
+                    username=username,
+                    password_hash=hash_password(password),
+                    role="superadmin",
+                    created_by="system",
+                    expire_at=None,  # 永不过期
+                    must_change_password=False,
+                    email="",
+                    avatar="",
+                )
+                logger.info("已创建默认超级管理员账号: %s (id=%s)", username, user_id)
+        await self.conn.commit()
 
     @property
     def conn(self) -> aiosqlite.Connection:

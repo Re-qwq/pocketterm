@@ -77,13 +77,14 @@ from app.api.v2.announcements import router as v2_announcements_router
 from app.api.v2.sauth_refresh import router as v2_sauth_refresh_router
 from app.api.v2.shop import router as v2_shop_router
 from app.api.v2.user_files import router as v2_user_files_router
+from app.api.v2.runner import router as v2_runner_router
 
 
 __all__ = ["app", "lifespan"]
 
 
 #: 应用版本号
-APP_VERSION: str = "1.5"
+APP_VERSION: str = "2.2.0"
 
 #: 应用入口日志器
 logger = get_logger("app")
@@ -181,27 +182,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # POCKETTERM_JWT_SECRET 读取 (生产环境未设置会直接抛错)，
         # 此处不再从 config.yaml 覆盖，避免弱密钥泄露。
 
-        # 创建超级管理员（如果不存在）
-        from app.security import hash_password
+        # 默认超级管理员账号 (admin/admin123456, owner/Owner@2026)
+        # 已在数据库初始化阶段 (Database.init_db -> _ensure_default_admins)
+        # 自动创建。此处仅对历史遗留的 admin 账号做角色升级, 保证其为 superadmin。
         admin_user = await db.get_user_by_username("admin")
-        if admin_user is None:
-            admin_id = await db.create_user(
-                username="admin",
-                password_hash=hash_password("admin123"),
-                role="superadmin",
-                created_by="system",
-                must_change_password=True,
-            )
-            logger.info(f"创建超级管理员: admin (id={admin_id})")
-            logger.warning(
-                "默认管理员使用初始密码 admin123，首次登录后必须修改密码 "
-                "(must_change_password=True)。"
-            )
-        else:
-            # 升级旧管理员为 superadmin
-            if admin_user["role"] != "superadmin":
-                await db.update_user_role(admin_user["user_id"], "superadmin")
-                logger.info("已将 admin 升级为 superadmin")
+        if admin_user is not None and admin_user["role"] != "superadmin":
+            await db.update_user_role(admin_user["user_id"], "superadmin")
+            logger.info("已将 admin 升级为 superadmin")
     except Exception:  # noqa: BLE001
         logger.exception("多用户数据库初始化失败 (将继续启动)")
 
@@ -484,6 +471,7 @@ app.include_router(v2_announcements_router)
 app.include_router(v2_sauth_refresh_router)
 app.include_router(v2_shop_router)
 app.include_router(v2_user_files_router)
+app.include_router(v2_runner_router)
 
 
 if __name__ == "__main__":

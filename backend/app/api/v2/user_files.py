@@ -19,11 +19,13 @@ from __future__ import annotations
 import os
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTask,
     File,
     Form,
     HTTPException,
@@ -32,6 +34,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.config import DATA_DIR
 from app.database import get_db
@@ -649,6 +652,231 @@ async def my_files(request: Request):
 
 
 # ============================================================================
+# 9. 删除文件
+# ============================================================================
+
+@router.delete("/{file_id}")
+async def delete_file(file_id: str, request: Request):
+    """删除文件 (仅文件所有者或管理员)。
+
+    - 同时删除数据库记录与磁盘文件
+    - 磁盘文件删除失败仅记录日志，不阻断数据库记录删除
+    """
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    row = await _get_file_or_404(db, file_id)
+
+    # 权限检查: 所有者或管理员
+    if not _can_modify(row, user):
+        raise HTTPException(status_code=403, detail="无权删除此文件")
+
+    # 路径安全: 解析并校验磁盘文件路径未越出 uploads 目录
+    root = _uploads_root()
+    target = (root / row["file_path"]).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法的文件路径")
+
+    # 删除磁盘文件 (容忍不存在 / 失败仅告警)
+    if target.is_file():
+        try:
+            target.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(f"删除磁盘文件失败 (file_id={file_id}, path={target}): {exc}")
+
+    # 删除数据库记录
+    await db.conn.execute(
+        "DELETE FROM user_files WHERE file_id = ?", (file_id,)
+    )
+    await db.conn.commit()
+
+    try:
+        await db.add_log(
+            target_type="user", target_id=user["user_id"],
+            level="warn",
+            message=f"用户 {user['username']} 删除文件: {row['name']} ({file_id})",
+            created_by=user["user_id"],
+        )
+    except Exception:
+        pass
+
+    return {"success": True, "message": "文件已删除"}
+
+
+# ============================================================================
+# 10. 重命名文件
+# ============================================================================
+
+class RenameRequest(BaseModel):
+    """重命名请求体。"""
+    name: str
+
+
+@router.patch("/{file_id}/rename")
+async def rename_file(file_id: str, body: RenameRequest, request: Request):
+    """重命名文件 (仅文件所有者或管理员)。
+
+    名称长度限制 1-18 字符。
+    """
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    row = await _get_file_or_404(db, file_id)
+
+    if not _can_modify(row, user):
+        raise HTTPException(status_code=403, detail="无权重命名此文件")
+
+    # 名称长度校验
+    new_name = (body.name or "").strip()
+    if not new_name or len(new_name) > MAX_NAME_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"名称长度需在 1-{MAX_NAME_LEN} 字符之间",
+        )
+
+    await db.conn.execute(
+        "UPDATE user_files SET name = ? WHERE file_id = ?",
+        (new_name, file_id),
+    )
+    await db.conn.commit()
+
+    updated = await (await db.conn.execute(
+        "SELECT * FROM user_files WHERE file_id = ?", (file_id,)
+    )).fetchone()
+
+    return {"success": True, "message": "重命名成功", "data": _file_to_dict(updated)}
+
+
+# ============================================================================
+# 11. 压缩文件为 zip
+# ============================================================================
+
+@router.post("/{file_id}/compress")
+async def compress_file(file_id: str, request: Request):
+    """将文件压缩为 zip 并返回下载 (FileResponse)。
+
+    - 付费文件需先购买 (所有者/管理员可直接压缩)
+    - 压缩产物为临时文件，响应发送后自动清理
+    """
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    row = await _get_file_or_404(db, file_id)
+    await _assert_download_allowed(row, user, db)
+
+    # 下载计数 +1
+    try:
+        await db.conn.execute(
+            "UPDATE user_files SET download_count = download_count + 1 WHERE file_id = ?",
+            (file_id,),
+        )
+        await db.conn.commit()
+    except Exception:
+        pass
+
+    return _build_zip_response(row)
+
+
+# ============================================================================
+# 12. 下载压缩版 (zip)
+# ============================================================================
+
+@router.get("/{file_id}/download-zip")
+async def download_zip(file_id: str, request: Request):
+    """下载文件的 zip 压缩版。
+
+    - 付费文件需先购买 (所有者/管理员可直接下载)
+    """
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    row = await _get_file_or_404(db, file_id)
+    await _assert_download_allowed(row, user, db)
+
+    # 下载计数 +1
+    try:
+        await db.conn.execute(
+            "UPDATE user_files SET download_count = download_count + 1 WHERE file_id = ?",
+            (file_id,),
+        )
+        await db.conn.commit()
+    except Exception:
+        pass
+
+    return _build_zip_response(row)
+
+
+# ============================================================================
+# 13. 更新文件信息
+# ============================================================================
+
+class UpdateFileRequest(BaseModel):
+    """更新文件信息请求体 (所有字段可选)。"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+
+
+@router.patch("/{file_id}/update")
+async def update_file(file_id: str, body: UpdateFileRequest, request: Request):
+    """更新文件信息 (仅文件所有者或管理员)。
+
+    可更新字段: name (1-18 字符)、description (最多 60 字符)、price (>=0)。
+    """
+    from .auth import require_user
+    user = await require_user(request)
+    db = await get_db()
+
+    row = await _get_file_or_404(db, file_id)
+
+    if not _can_modify(row, user):
+        raise HTTPException(status_code=403, detail="无权更新此文件")
+
+    # 收集待更新字段并逐项校验
+    updates: dict = {}
+    if body.name is not None:
+        name = body.name.strip()
+        if not name or len(name) > MAX_NAME_LEN:
+            raise HTTPException(
+                status_code=400,
+                detail=f"名称长度需在 1-{MAX_NAME_LEN} 字符之间",
+            )
+        updates["name"] = name
+    if body.description is not None:
+        if len(body.description) > MAX_DESC_LEN:
+            raise HTTPException(
+                status_code=400,
+                detail=f"描述最多 {MAX_DESC_LEN} 字符",
+            )
+        updates["description"] = body.description
+    if body.price is not None:
+        if body.price < 0:
+            raise HTTPException(status_code=400, detail="价格不能为负数")
+        updates["price"] = float(body.price)
+
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        params = list(updates.values()) + [file_id]
+        await db.conn.execute(
+            f"UPDATE user_files SET {set_clause} WHERE file_id = ?",
+            params,
+        )
+        await db.conn.commit()
+
+    updated = await (await db.conn.execute(
+        "SELECT * FROM user_files WHERE file_id = ?", (file_id,)
+    )).fetchone()
+
+    return {"success": True, "message": "更新成功", "data": _file_to_dict(updated)}
+
+
+# ============================================================================
 # 内部辅助
 # ============================================================================
 
@@ -656,6 +884,93 @@ async def _optional_user(request: Request):
     """尝试解析当前用户，不强制要求登录。"""
     from .auth import get_current_user
     return await get_current_user(request)
+
+
+def _can_modify(row, user) -> bool:
+    """判断当前用户是否有权修改/删除该文件 (所有者或管理员)。"""
+    return row["user_id"] == user["user_id"] or user["role"] in ("admin", "superadmin")
+
+
+async def _get_file_or_404(db, file_id: str):
+    """获取文件记录，不存在则抛 404。"""
+    row = await (await db.conn.execute(
+        "SELECT * FROM user_files WHERE file_id = ?", (file_id,)
+    )).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return row
+
+
+async def _assert_download_allowed(row, user, db) -> None:
+    """校验下载/压缩权限 (与 download_file 逻辑一致)。
+
+    - 非 approved 文件仅管理员可下载
+    - 付费文件需购买 (所有者/管理员直接放行)
+    """
+    if row["status"] != "approved":
+        if user["role"] not in ("admin", "superadmin"):
+            raise HTTPException(status_code=403, detail="文件未通过审核，暂不可下载")
+
+    is_owner = row["user_id"] == user["user_id"]
+    is_admin = user["role"] in ("admin", "superadmin")
+
+    if not is_owner and not is_admin and float(row["price"]) > 0:
+        purchased = await (await db.conn.execute(
+            "SELECT 1 FROM shop_orders WHERE user_id = ? AND file_id = ? AND status = 'completed' LIMIT 1",
+            (user["user_id"], row["file_id"]),
+        )).fetchone()
+        if not purchased:
+            raise HTTPException(status_code=403, detail="此为付费文件，请先购买")
+
+
+def _build_zip_response(row) -> FileResponse:
+    """将文件打包为 zip (临时文件) 并返回 FileResponse。
+
+    - 路径安全: 解析并校验未越出 uploads 目录
+    - 临时文件在响应发送后通过 BackgroundTask 自动清理
+    """
+    root = _uploads_root()
+    target = (root / row["file_path"]).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法的文件路径")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在于磁盘")
+
+    file_id = row["file_id"]
+    # 还原原始文件名 (去掉 file_id_ 前缀)
+    display_name = row["file_path"]
+    if display_name.startswith(f"{file_id}_"):
+        display_name = display_name[len(file_id) + 1:]
+
+    # 写入临时 zip 文件 (uuid 后缀避免并发冲突)
+    tmp_dir = DATA_DIR / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = tmp_dir / f"{file_id}_{uuid.uuid4().hex[:8]}.zip"
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(target, arcname=display_name)
+    except OSError as exc:
+        zip_path.unlink(missing_ok=True)
+        logger.exception(f"压缩文件失败 (file_id={file_id})")
+        raise HTTPException(status_code=500, detail=f"压缩失败: {exc}")
+
+    return FileResponse(
+        path=str(zip_path),
+        filename=f"{display_name}.zip",
+        media_type="application/zip",
+        background=BackgroundTask(_cleanup_tmp, zip_path),
+    )
+
+
+def _cleanup_tmp(path) -> None:
+    """删除临时文件 (容忍不存在)。"""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 __all__ = ["router"]

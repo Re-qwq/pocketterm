@@ -1,4 +1,4 @@
-"""系统管理 API - nv1状态、封号检测、系统统计。"""
+"""系统管理 API - nv1状态、封号检测、系统统计、版本信息。"""
 from __future__ import annotations
 
 import json
@@ -344,3 +344,37 @@ async def download_access_point_v2(name: str, request: Request):
         return {"success": True, "data": {"path": str(path)}}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# 版本信息
+# ============================================================================
+
+@router.get("/version")
+async def get_version():
+    """获取应用版本信息 (无需登录)。
+
+    返回当前应用版本号、构建时间和功能列表, 供前端显示和版本检查。
+    """
+    from app.main import APP_VERSION
+    return {
+        "success": True,
+        "data": {
+            "version": APP_VERSION,
+            "build_time": time.time(),
+            "features": [
+                "multi-user",
+                "card-system",
+                "panel-management",
+                "bot-management",
+                "plugin-system",
+                "file-management",
+                "command-runner",
+                "pe-pc-switch",
+                "ban-detection",
+                "nv1-sauth",
+                "shop",
+                "announcements",
+            ],
+        },
+    }

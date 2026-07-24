@@ -529,6 +529,23 @@
         const savedTheme = localStorage.getItem('pocketterm-theme') || 'dark';
         applyTheme(savedTheme);
 
+        // 从后端获取版本号并更新前端显示
+        try {
+            const res = await fetch('/api/v2/system/version');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.data && data.data.version) {
+                    const ver = 'v' + data.data.version;
+                    const bootVer = document.getElementById('bootVersion');
+                    if (bootVer) bootVer.textContent = ver;
+                    const topbarVer = document.getElementById('topbarVersion');
+                    if (topbarVer) topbarVer.textContent = ver;
+                }
+            }
+        } catch (e) {
+            // 版本获取失败不影响启动
+        }
+
         // 启动序列：显示 boot 屏幕 2 秒
         await sleep(2000);
 
@@ -686,88 +703,6 @@
         }
     }
 
-    /** 邮箱验证码倒计时定时器句柄 */
-    let emailCodeTimer = null;
-
-    /**
-     * 发送邮箱验证码
-     * - 校验邮箱格式
-     * - 调用 POST /api/v2/auth/email/send
-     * - 成功后启动 60 秒倒计时, 期间禁用按钮
-     */
-    async function sendEmailCode() {
-        const emailInput = $("regEmail");
-        const btn = $("sendEmailCodeBtn");
-        const textEl = $("sendEmailCodeText");
-        if (!emailInput || !btn || !textEl) return;
-
-        const email = emailInput.value.trim();
-        // 基础邮箱格式校验
-        if (!email) {
-            toastWarn("请先输入QQ邮箱");
-            emailInput.focus();
-            return;
-        }
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            toastWarn("邮箱格式不正确");
-            emailInput.focus();
-            return;
-        }
-        // 倒计时进行中则忽略
-        if (emailCodeTimer) return;
-
-        btn.disabled = true;
-        textEl.textContent = "发送中...";
-
-        try {
-            const res = await api("/auth/email/send", {
-                method: "POST",
-                body: { email },
-            });
-            if (res.success) {
-                if (res.email_sent === false) {
-                    // 邮件服务未配置, 显示验证码 (开发模式)
-                    toastWarn(res.message || "邮件服务未配置");
-                } else {
-                    toastSuccess("验证码已发送至邮箱，请查收");
-                }
-                startEmailCodeCountdown(60);
-            } else {
-                toastError(res.message || res.detail || "验证码发送失败");
-                btn.disabled = false;
-                textEl.textContent = "发送验证码";
-            }
-        } catch (err) {
-            // api() 已提示具体错误
-            btn.disabled = false;
-            textEl.textContent = "发送验证码";
-        }
-    }
-
-    /**
-     * 启动邮箱验证码倒计时
-     * @param {number} seconds - 倒计时秒数
-     */
-    function startEmailCodeCountdown(seconds) {
-        const btn = $("sendEmailCodeBtn");
-        const textEl = $("sendEmailCodeText");
-        if (!btn || !textEl) return;
-        let remaining = seconds;
-        btn.disabled = true;
-        textEl.textContent = `重新发送 (${remaining}s)`;
-        emailCodeTimer = setInterval(() => {
-            remaining -= 1;
-            if (remaining <= 0) {
-                clearInterval(emailCodeTimer);
-                emailCodeTimer = null;
-                btn.disabled = false;
-                textEl.textContent = "发送验证码";
-            } else {
-                textEl.textContent = `重新发送 (${remaining}s)`;
-            }
-        }, 1000);
-    }
-
     /**
      * 处理注册表单提交
      */
@@ -776,22 +711,12 @@
         const username = $("regUsername").value.trim();
         const password = $("regPassword").value;
         const cardKey = $("regCardKey").value.trim();
-        const email = $("regEmail") ? $("regEmail").value.trim() : "";
-        const emailCode = $("regEmailCode") ? $("regEmailCode").value.trim() : "";
         const captchaAnswer = $("regCaptchaInput").value.trim();
         const captchaId = $("regCaptchaId").value;
         const btn = $("registerBtn");
 
         if (!username || !password || !cardKey || !captchaAnswer) {
             toastWarn("请填写所有必填项");
-            return;
-        }
-        if (!email) {
-            toastWarn("请输入QQ邮箱");
-            return;
-        }
-        if (!emailCode) {
-            toastWarn("请输入邮箱验证码");
             return;
         }
 
@@ -805,8 +730,6 @@
                     username,
                     password,
                     card_key: cardKey,
-                    email,
-                    email_code: emailCode,
                     captcha_answer: captchaAnswer,
                     captcha_id: captchaId,
                 },
@@ -816,11 +739,6 @@
                 // 清空注册表单
                 $("registerForm").reset();
                 state.captchaId = null;
-                // 清除邮箱验证码倒计时
-                if (emailCodeTimer) {
-                    clearInterval(emailCodeTimer);
-                    emailCodeTimer = null;
-                }
                 // 切换到登录
                 switchAuthTab("login");
                 $("loginUsername").value = username;
@@ -931,6 +849,9 @@
         $("adminDivider").style.display = isAdmin ? "" : "none";
         $("adminSection").style.display = isAdmin ? "" : "none";
         $("quickCards").style.display = isAdmin ? "" : "none";
+        // 运行器仅管理员可见
+        const navRunner = $("navRunner");
+        if (navRunner) navRunner.style.display = isAdmin ? "" : "none";
         const annCreateBtn = $("annCreateBtn");
         if (annCreateBtn) annCreateBtn.style.display = isAdmin ? "" : "none";
         // 面板范围切换标签 (我的面板/全部面板) 仅管理员可见
@@ -954,9 +875,14 @@
      * @param {string} view - 视图名称
      */
     function switchView(view) {
-        // 客户端访问控制: 非管理员不能访问 admin-* 视图
+        // 客户端访问控制: 非管理员不能访问 admin-* 视图和 runner 视图
         if (view && view.startsWith("admin-") && !isAdmin()) {
             toastWarn("没有权限访问该页面");
+            switchView("dashboard");
+            return;
+        }
+        if (view === "runner" && !isAdmin()) {
+            toastWarn("没有权限访问运行器");
             switchView("dashboard");
             return;
         }
@@ -1014,6 +940,9 @@
                 break;
             case "files":
                 loadFiles();
+                break;
+            case "runner":
+                loadRunnerFiles();
                 break;
             case "admin-orders":
                 loadAdminOrders();
@@ -3748,11 +3677,12 @@
     }
 
     /**
-     * 下载文件 (在新标签页打开)
+     * 下载文件 (在新标签页打开, 带认证 token)
      * @param {number|string} fileId - 文件 ID
      */
     function downloadFile(fileId) {
-        window.open("/api/v2/files/" + fileId + "/download", "_blank");
+        const token = state.token || "";
+        window.open("/api/v2/files/" + fileId + "/download?token=" + encodeURIComponent(token), "_blank");
     }
 
     /**
@@ -3827,6 +3757,7 @@
             const price = parseFloat(f.price || 0).toFixed(2);
             const category = f.category || "";
             const status = f.status || "pending";
+            const fileId = f.file_id || f.id || "";
             const st = statusMap[status] || statusMap.pending;
             const catLabel = category === "plugin" ? "插件" : category === "building" ? "建筑" : category;
             return `
@@ -3842,6 +3773,13 @@
                             ${f.reject_reason ? `<div style="font-size:12px;color:#f85149;margin-top:4px;">拒绝原因: ${escapeHtml(f.reject_reason)}</div>` : ""}
                         </div>
                         <span style="color:#3fb950;font-weight:600;font-size:13px;white-space:nowrap;">${parseFloat(price) === 0 ? "免费" : '<i class="fas fa-coins"></i> ' + escapeHtml(price)}</span>
+                    </div>
+                    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                        <button onclick="window.downloadUserFile('${escAttr(fileId)}')" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;"><i class="fas fa-download"></i> 下载</button>
+                        <button onclick="window.downloadFileZip('${escAttr(fileId)}')" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;"><i class="fas fa-file-archive"></i> ZIP</button>
+                        <button onclick="window.renameUserFile('${escAttr(fileId)}','${escAttr(name)}')" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;"><i class="fas fa-edit"></i> 重命名</button>
+                        <button onclick="window.updateUserFile('${escAttr(fileId)}','${escAttr(name)}','${escAttr(desc)}',${parseFloat(price)})" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;"><i class="fas fa-cog"></i> 编辑</button>
+                        <button onclick="window.deleteUserFile('${escAttr(fileId)}')" class="btn btn-danger" style="padding:4px 10px;font-size:12px;"><i class="fas fa-trash-alt"></i> 删除</button>
                     </div>
                 </div>
             `;
@@ -4550,9 +4488,6 @@
 
         // ---- 验证码刷新 ----
         $("captchaImgBox").addEventListener("click", loadCaptcha);
-        // ---- 邮箱验证码发送 ----
-        const sendEmailCodeBtn = $("sendEmailCodeBtn");
-        if (sendEmailCodeBtn) sendEmailCodeBtn.addEventListener("click", sendEmailCode);
 
         // ---- 登录 / 注册表单 ----
         $("loginForm").addEventListener("submit", handleLogin);
@@ -4948,6 +4883,33 @@
 
         // ---- 欢迎时间定时刷新 ----
         setInterval(updateWelcomeTime, 1000);
+
+        // ---- 运行器 ----
+        const runnerExecuteBtn = $("runnerExecuteBtn");
+        if (runnerExecuteBtn) runnerExecuteBtn.addEventListener("click", handleRunnerExecute);
+        const runnerStopBtn = $("runnerStopBtn");
+        if (runnerStopBtn) runnerStopBtn.addEventListener("click", handleRunnerStop);
+        const runnerClearBtn = $("runnerClearBtn");
+        if (runnerClearBtn) runnerClearBtn.addEventListener("click", () => {
+            const out = $("runnerOutput");
+            if (out) out.innerHTML = '<span style="color:#586069;">$ 屏幕已清空</span>\n';
+        });
+        const runnerRefreshFilesBtn = $("runnerRefreshFilesBtn");
+        if (runnerRefreshFilesBtn) runnerRefreshFilesBtn.addEventListener("click", loadRunnerFiles);
+        const runnerUploadBtn = $("runnerUploadBtn");
+        const runnerFileInput = $("runnerFileInput");
+        if (runnerUploadBtn && runnerFileInput) {
+            runnerUploadBtn.addEventListener("click", () => runnerFileInput.click());
+            runnerFileInput.addEventListener("change", (e) => handleRunnerUpload(e));
+        }
+        // 命令输入框 Ctrl+Enter 执行
+        const runnerCommand = $("runnerCommand");
+        if (runnerCommand) runnerCommand.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                handleRunnerExecute();
+            }
+        });
     }
 
     /* ======================================================================
@@ -5328,7 +5290,290 @@
     }
 
     /* ======================================================================
-       21. 启动
+       21. 运行器功能
+       ====================================================================== */
+
+    let runnerWs = null;
+    let runnerRunning = false;
+
+    async function loadRunnerFiles() {
+        try {
+            const data = await api("/api/v2/runner/files");
+            const files = data.files || [];
+            const container = $("runnerFilesList");
+            if (!container) return;
+            if (files.length === 0) {
+                container.innerHTML = '<div style="color:var(--text-tertiary);font-size:13px;text-align:center;padding:12px;">暂无脚本文件</div>';
+                return;
+            }
+            container.innerHTML = files.map(f => {
+                const sizeStr = f.size > 1024 ? (f.size / 1024).toFixed(1) + ' KB' : f.size + ' B';
+                return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border-muted);font-size:13px;">
+                    <i class="fas fa-file-code" style="color:var(--color-primary);"></i>
+                    <span style="flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="window.fillRunnerCommand('${escAttr(f.name)}')">${escapeHtml(f.name)}</span>
+                    <span style="color:var(--text-tertiary);font-size:11px;">${sizeStr}</span>
+                    <button onclick="window.deleteRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-danger);cursor:pointer;padding:2px 6px;" title="删除"><i class="fas fa-trash-alt"></i></button>
+                </div>`;
+            }).join("");
+        } catch (e) {
+            if ($("runnerFilesList")) $("runnerFilesList").innerHTML = '<div style="color:var(--color-danger);font-size:13px;">加载失败: ' + escapeHtml(e.message) + '</div>';
+        }
+    }
+
+    window.deleteRunnerFile = async function(filename) {
+        if (!confirm("确定要删除文件 " + filename + " 吗?")) return;
+        try {
+            await api("/api/v2/runner/files/" + encodeURIComponent(filename), { method: "DELETE" });
+            toastSuccess("文件已删除");
+            loadRunnerFiles();
+        } catch (e) {
+            toastError("删除失败: " + e.message);
+        }
+    };
+
+    window.fillRunnerCommand = function(filename) {
+        const cmdInput = document.getElementById("runnerCommand");
+        if (cmdInput) {
+            // 根据文件扩展名自动选择解释器
+            const ext = filename.split('.').pop().toLowerCase();
+            const runners = {
+                'py': 'python3',
+                'js': 'node',
+                'go': 'go run',
+                'sh': 'bash',
+                'bash': 'bash',
+                'rb': 'ruby',
+                'pl': 'perl',
+                'php': 'php',
+                'java': 'java',
+            };
+            const runner = runners[ext] || '';
+            cmdInput.value = runner ? runner + ' ' + filename : filename;
+        }
+    };
+
+    async function handleRunnerUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const formData = new FormData();
+        formData.append("file", file);
+        try {
+            const token = state.token || localStorage.getItem("pt_token") || "";
+            const resp = await fetch("/api/v2/runner/upload", {
+                method: "POST",
+                headers: { "Authorization": "Bearer " + token },
+                body: formData,
+            });
+            const data = await resp.json();
+            if (data.success) {
+                toastSuccess("上传成功: " + data.filename);
+                loadRunnerFiles();
+            } else {
+                toastError("上传失败: " + (data.detail || data.message || "未知错误"));
+            }
+        } catch (e) {
+            toastError("上传失败: " + e.message);
+        }
+        e.target.value = "";
+    }
+
+    async function handleRunnerExecute() {
+        const command = $("runnerCommand")?.value.trim();
+        if (!command) { toastWarn("请输入命令"); return; }
+        if (runnerRunning) { toastWarn("已有命令正在执行"); return; }
+
+        const cwd = $("runnerCwd")?.value.trim() || "/workspace";
+        const timeout = parseInt($("runnerTimeout")?.value || "30");
+
+        runnerRunning = true;
+        $("runnerExecuteBtn").disabled = true;
+        $("runnerStopBtn").disabled = false;
+        const statusEl = $("runnerStatus");
+        if (statusEl) { statusEl.textContent = "执行中..."; statusEl.style.color = "var(--color-warning)"; }
+        const out = $("runnerOutput");
+        if (out) out.innerHTML = "";
+
+        // 尝试用 WebSocket 实时输出
+        const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${wsProtocol}//${location.host}/api/v2/runner/ws?token=${encodeURIComponent(state.token || "")}`;
+
+        try {
+            runnerWs = new WebSocket(wsUrl);
+            let wsConnected = false;
+
+            runnerWs.onopen = () => {
+                wsConnected = true;
+                runnerWs.send(JSON.stringify({ action: "execute", command, cwd, timeout }));
+            };
+
+            runnerWs.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                if (msg.type === "stdout") {
+                    appendRunnerOutput(msg.data, "stdout");
+                } else if (msg.type === "stderr") {
+                    appendRunnerOutput(msg.data, "stderr");
+                } else if (msg.type === "exit") {
+                    appendRunnerOutput(`\n[进程退出, code=${msg.code}, 耗时 ${msg.duration}s]`, "exit");
+                    finishRunner(msg.code);
+                } else if (msg.type === "error") {
+                    appendRunnerOutput("错误: " + msg.message, "stderr");
+                    finishRunner(-1);
+                }
+            };
+
+            runnerWs.onerror = () => {
+                if (!wsConnected) {
+                    // WebSocket 不可用, 回退到 HTTP
+                    fallbackHttpExecute(command, cwd, timeout);
+                }
+            };
+
+            runnerWs.onclose = () => {
+                if (runnerRunning) {
+                    finishRunner(-1);
+                }
+            };
+
+            // 3秒后如果 WebSocket 未连接, 回退
+            setTimeout(() => {
+                if (!wsConnected && runnerRunning) {
+                    if (runnerWs) runnerWs.close();
+                    fallbackHttpExecute(command, cwd, timeout);
+                }
+            }, 3000);
+
+        } catch (e) {
+            fallbackHttpExecute(command, cwd, timeout);
+        }
+    }
+
+    async function fallbackHttpExecute(command, cwd, timeout) {
+        appendRunnerOutput("$ " + command + "\n", "cmd");
+        try {
+            const data = await api("/api/v2/runner/execute", {
+                method: "POST",
+                body: JSON.stringify({ command, cwd, timeout }),
+            });
+            if (data.stdout) appendRunnerOutput(data.stdout, "stdout");
+            if (data.stderr) appendRunnerOutput(data.stderr, "stderr");
+            appendRunnerOutput(`\n[进程退出, code=${data.exit_code}, 耗时 ${data.duration}s]`, "exit");
+            finishRunner(data.exit_code);
+        } catch (e) {
+            appendRunnerOutput("错误: " + e.message, "stderr");
+            finishRunner(-1);
+        }
+    }
+
+    function appendRunnerOutput(text, type) {
+        const out = $("runnerOutput");
+        if (!out) return;
+        const color = type === "stderr" ? "#f85149" : type === "exit" ? "#58a6ff" : type === "cmd" ? "#d2a8ff" : "#e6edf3";
+        const span = document.createElement("span");
+        span.style.color = color;
+        span.textContent = text;
+        out.appendChild(span);
+        out.scrollTop = out.scrollHeight;
+    }
+
+    function finishRunner(exitCode) {
+        runnerRunning = false;
+        $("runnerExecuteBtn").disabled = false;
+        $("runnerStopBtn").disabled = true;
+        const statusEl = $("runnerStatus");
+        if (statusEl) {
+            statusEl.textContent = exitCode === 0 ? "执行完成" : "已结束 (code=" + exitCode + ")";
+            statusEl.style.color = exitCode === 0 ? "var(--color-success)" : "var(--color-danger)";
+        }
+        if (runnerWs) { try { runnerWs.close(); } catch(_) {} runnerWs = null; }
+    }
+
+    function handleRunnerStop() {
+        if (runnerWs && runnerWs.readyState === WebSocket.OPEN) {
+            runnerWs.send(JSON.stringify({ action: "signal", signal: "SIGINT" }));
+            appendRunnerOutput("\n[发送 Ctrl+C 信号...]", "exit");
+        } else if (runnerRunning) {
+            // HTTP 模式下无法发送中断信号, 提示用户
+            appendRunnerOutput("\n[HTTP 模式下无法中断, 请等待超时或完成]", "error");
+            toastInfo("HTTP 模式不支持中断, 请使用 WebSocket 模式");
+        }
+    }
+
+    /* ======================================================================
+       22. 文件管理操作 (删除/重命名/压缩/下载)
+       ====================================================================== */
+
+    window.deleteUserFile = async function(fileId) {
+        if (!confirm("确定要删除此文件吗? 此操作不可撤销.")) return;
+        try {
+            await api(`/api/v2/files/${fileId}`, { method: "DELETE" });
+            toastSuccess("文件已删除");
+            loadFiles();
+        } catch (e) {
+            toastError("删除失败: " + e.message);
+        }
+    };
+
+    window.downloadUserFile = function(fileId) {
+        const token = state.token || "";
+        window.open(`/api/v2/files/${fileId}/download?token=${encodeURIComponent(token)}`, "_blank");
+    };
+
+    window.compressUserFile = async function(fileId) {
+        try {
+            toastInfo("正在压缩文件...");
+            const result = await api(`/api/v2/files/${fileId}/compress`, { method: "POST" });
+            if (result && result.success) {
+                toastSuccess("压缩完成, 开始下载...");
+                window.downloadFileZip(fileId);
+            }
+        } catch (e) {
+            toastError("压缩失败: " + e.message);
+        }
+    };
+
+    window.renameUserFile = async function(fileId, currentName) {
+        const newName = prompt("请输入新名称:", currentName);
+        if (!newName || newName === currentName) return;
+        try {
+            await api(`/api/v2/files/${fileId}/rename`, {
+                method: "PATCH",
+                body: JSON.stringify({ name: newName }),
+            });
+            toastSuccess("重命名成功");
+            loadFiles();
+        } catch (e) {
+            toastError("重命名失败: " + e.message);
+        }
+    };
+
+    window.downloadFileZip = function(fileId) {
+        const token = state.token || "";
+        window.open(`/api/v2/files/${fileId}/download-zip?token=${encodeURIComponent(token)}`, "_blank");
+    };
+
+    window.updateUserFile = async function(fileId, name, desc, price) {
+        const newName = prompt("文件名称:", name);
+        if (!newName) return;
+        const newDesc = prompt("文件描述:", desc || "");
+        const newPrice = prompt("价格 (0=免费):", String(price || 0));
+        try {
+            await api(`/api/v2/files/${fileId}/update`, {
+                method: "PATCH",
+                body: JSON.stringify({
+                    name: newName,
+                    description: newDesc,
+                    price: parseFloat(newPrice) || 0,
+                }),
+            });
+            toastSuccess("更新成功");
+            loadFiles();
+        } catch (e) {
+            toastError("更新失败: " + e.message);
+        }
+    };
+
+    /* ======================================================================
+       23. 启动
        ====================================================================== */
 
     // 暴露部分函数供动态生成的内联按钮 (如加载失败重试) 调用

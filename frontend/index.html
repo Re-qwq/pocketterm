@@ -1559,7 +1559,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 |  __/| |_| | (__|   <  __/| | (_) | (_) || |
 |_|    \__,_|\___|_|\_\___||_|\___/ \___/ |_|
     </pre>
-    <div class="boot-version">Version <span>v2.1</span></div>
+    <div class="boot-version">Version <span id="bootVersion">v2.2.0</span></div>
     <div class="boot-loader">
         <span class="dot"></span>
         <span class="dot"></span>
@@ -1631,25 +1631,6 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                            placeholder="输入注册卡密" autocomplete="off" required>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="regEmail">
-                        <i class="fas fa-envelope"></i> QQ邮箱
-                    </label>
-                    <div style="display:flex;gap:10px;align-items:stretch;">
-                        <input type="email" class="form-input" id="regEmail" name="email"
-                               placeholder="QQ邮箱 (如 12345@qq.com)" autocomplete="email" required style="flex:1;">
-                        <button type="button" class="btn btn-secondary" id="sendEmailCodeBtn" style="flex-shrink:0;white-space:nowrap;">
-                            <i class="fas fa-paper-plane"></i> <span id="sendEmailCodeText">发送验证码</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="regEmailCode">
-                        <i class="fas fa-shield-alt"></i> 邮箱验证码
-                    </label>
-                    <input type="text" class="form-input" id="regEmailCode" name="email_code"
-                           placeholder="输入邮箱验证码" autocomplete="off" required maxlength="6">
-                </div>
-                <div class="form-group">
                     <label class="form-label">
                         <i class="fas fa-shield-alt"></i> 图形验证码
                     </label>
@@ -1690,7 +1671,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         <div class="topbar-brand">
             <div class="brand-icon"><i class="fas fa-terminal"></i></div>
             <span class="brand-name">PocketTerm</span>
-            <span class="brand-version">v2.1</span>
+            <span class="brand-version" id="topbarVersion">v2.2.0</span>
         </div>
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
@@ -1762,6 +1743,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <div class="nav-item" data-view="files">
                     <i class="fas fa-folder nav-icon"></i>
                     <span class="nav-label">文件管理</span>
+                </div>
+                <div class="nav-item" data-view="runner" id="navRunner" style="display:none;">
+                    <i class="fas fa-terminal nav-icon"></i>
+                    <span class="nav-label">运行器</span>
                 </div>
             </div>
 
@@ -2858,6 +2843,62 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <div class="card">
                     <div class="card-header"><div class="card-title"><i class="fas fa-user"></i> 我的文件</div></div>
                     <div class="card-body"><div id="myFilesList" style="max-height:600px;overflow-y:auto;"></div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Runner (运行器)
+             ================================================================== -->
+        <section class="view" id="view-runner">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-terminal"></i> 命令运行器</div>
+                    <div class="page-subtitle">执行脚本和命令，实时查看输出</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-secondary btn-sm" id="runnerRefreshFilesBtn"><i class="fas fa-sync-alt"></i> 刷新文件</button>
+                    <button class="btn btn-primary btn-sm" id="runnerUploadBtn"><i class="fas fa-upload"></i> 上传脚本</button>
+                </div>
+            </div>
+            <div class="dashboard-grid" style="grid-template-columns:1fr 1fr;gap:16px;">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-keyboard"></i> 命令输入</div>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-folder"></i> 工作目录</label>
+                            <input type="text" class="form-input" id="runnerCwd" value="/workspace" placeholder="/workspace">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-clock"></i> 超时 (秒)</label>
+                            <input type="number" class="form-input" id="runnerTimeout" value="30" min="1" max="120" style="width:120px;">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-terminal"></i> 命令</label>
+                            <textarea class="form-input" id="runnerCommand" rows="3" placeholder="python3 script.py&#10;go run main.go&#10;java -jar app.jar&#10;./executable" style="font-family:monospace;font-size:13px;"></textarea>
+                        </div>
+                        <div style="display:flex;gap:8px;">
+                            <button class="btn btn-primary" id="runnerExecuteBtn"><i class="fas fa-play"></i> 执行</button>
+                            <button class="btn btn-danger" id="runnerStopBtn" disabled><i class="fas fa-stop"></i> 停止</button>
+                            <button class="btn btn-secondary" id="runnerClearBtn"><i class="fas fa-eraser"></i> 清屏</button>
+                        </div>
+                        <div style="margin-top:12px;">
+                            <label class="form-label"><i class="fas fa-file-code"></i> 脚本文件列表</label>
+                            <div id="runnerFilesList" style="max-height:200px;overflow-y:auto;border:1px solid var(--border-muted);border-radius:8px;padding:8px;"></div>
+                        </div>
+                        <input type="file" id="runnerFileInput" style="display:none;" accept=".py,.go,.java,.js,.sh,.txt,.exe,.bin">
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-stream"></i> 输出</div>
+                        <div id="runnerStatus" style="font-size:12px;color:var(--text-tertiary);">就绪</div>
+                    </div>
+                    <div class="card-body" style="padding:0;">
+                        <pre id="runnerOutput" style="margin:0;padding:16px;max-height:500px;overflow-y:auto;background:#0d1117;color:#e6edf3;font-family:'Consolas','Monaco',monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all;border-radius:0 0 8px 8px;"><span style="color:#586069;">$ 等待执行命令...</span></pre>
+                    </div>
                 </div>
             </div>
         </section>
