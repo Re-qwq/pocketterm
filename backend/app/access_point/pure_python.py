@@ -429,8 +429,59 @@ class PurePythonAccessPoint(AccessPoint):
                 self._log("账号已被网易封禁 (code=29)", "error")
                 self.info.last_error = "账号已被网易封禁 (code=29)"
             elif "code=32" in err_msg:
-                self._log("认证已过期或无效 (code=32), 请检查4399账号池或刷新sauth_json", "error")
-                self.info.last_error = "认证已过期或无效 (code=32), 请检查4399账号池或刷新sauth_json"
+                # code=32: sessionid 过期或损坏, 尝试自动刷新 sauth_json 后重试
+                self._log("认证已过期 (code=32), 正在自动刷新 sauth_json...", "warning")
+                try:
+                    from ..auth.sauth_refresh import sauth_refresher
+                    fresh_sauth = await sauth_refresher.get_fresh_sauth()
+                    if fresh_sauth:
+                        self._log("sauth_json 刷新成功, 正在重试登录...", "protocol")
+                        # 更新 config 中的 sauth_json
+                        self.config["sauth_json"] = fresh_sauth
+                        # 重试登录
+                        async with NeteaseDirectClient(mode=mode, timeout=60.0) as retry_client:
+                            await retry_client.login(fresh_sauth)
+                            self._log(f"重试登录成功! UID: {retry_client.uid}", "success")
+
+                            # 获取用户信息
+                            try:
+                                await retry_client.get_user_detail()
+                                if retry_client.player_name:
+                                    self._log(f"用户昵称: {retry_client.player_name}", "success")
+                            except Exception:
+                                pass
+
+                            # 连接租赁服
+                            if server_code and server_code != "custom":
+                                bot_name = self.config.get("bot_name", "")
+                                display_name = bot_name or (
+                                    f"PT_{retry_client.player_name}" if retry_client.player_name else f"PT_{retry_client.uid}"
+                                )
+                                result = await retry_client.connect_rental_server(
+                                    server_code, server_password, display_name=display_name
+                                )
+                                self._log("已找到并进入租赁服!", "success")
+                                self._log(f"服务器地址: {result.server_address}", "info")
+                                return {
+                                    "chain_info": result.chain_info,
+                                    "server_address": result.server_address,
+                                }
+                            else:
+                                server_address = self.config.get("server_address", "")
+                                if not server_address:
+                                    self._log("自定义模式需要提供 server_address", "error")
+                                    return None
+                                return {
+                                    "chain_info": "",
+                                    "server_address": server_address,
+                                }
+                    else:
+                        self._log("sauth_json 自动刷新失败, 无可用 4399 账号", "error")
+                        self.info.last_error = "认证已过期 (code=32) 且自动刷新失败, 请检查4399账号池"
+                except Exception as refresh_err:
+                    self._log(f"sauth_json 自动刷新异常: {refresh_err}", "error")
+                    self.info.last_error = f"认证已过期 (code=32), 自动刷新异常: {refresh_err}"
+                # 如果自动刷新和重试都失败, 不再设置 last_error (已在上面设置)
             elif "code=10" in err_msg:
                 self._log("未登录或登录已过期 (code=10), 请检查sauth_json", "error")
                 self.info.last_error = "未登录或登录已过期 (code=10), 请检查sauth_json"

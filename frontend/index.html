@@ -1410,6 +1410,91 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 .sidebar-backdrop.visible { display: block; }
 
 /* ==========================================================================
+   Runner (运行器)
+   ========================================================================== */
+.runner-files-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+}
+.runner-empty { color: var(--text-tertiary); font-size: 13px; text-align: center; padding: 20px 12px; }
+.runner-upload-btn { min-height: 48px; font-size: 14px; }
+.runner-cwd-timeout { display: flex; gap: 12px; }
+.runner-cwd-group { flex: 1; }
+.runner-timeout-group { width: 120px; flex-shrink: 0; }
+.runner-action-row { display: flex; gap: 10px; }
+.runner-action-btn { flex: 1; min-height: 48px; font-size: 14px; }
+.runner-status { font-size: 12px; color: var(--text-tertiary); }
+.runner-output {
+    margin: 0; padding: 16px;
+    max-height: 460px; overflow-y: auto;
+    background: #0d1117; color: #e6edf3;
+    font-family: 'Consolas','Monaco',monospace;
+    font-size: 13px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-all;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+/* 文件列表条目 */
+.runner-file-item { padding: 10px 12px; border-bottom: 1px solid var(--border-muted); }
+.runner-file-item:last-child { border-bottom: none; }
+.runner-file-info { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.runner-file-icon { color: var(--color-primary); }
+.runner-file-name {
+    flex: 1; cursor: pointer; font-size: 13px; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.runner-file-name:hover { color: var(--color-primary); }
+.runner-file-size { color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
+.runner-file-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.runner-file-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    min-height: 34px; padding: 0 10px; font-size: 12px; font-weight: 600;
+    border-radius: var(--radius-sm); border: 1px solid transparent;
+    background: var(--bg-hover); color: var(--text-secondary); cursor: pointer;
+    transition: all var(--transition);
+}
+.runner-file-btn.run { background: rgba(88,166,255,0.12); color: var(--color-primary); border-color: rgba(88,166,255,0.3); }
+.runner-file-btn.run:hover { background: rgba(88,166,255,0.2); }
+.runner-file-btn.dl { color: var(--color-primary); }
+.runner-file-btn.rn { color: var(--color-warning); }
+.runner-file-btn.zip { color: var(--color-success); }
+.runner-file-btn.del { color: var(--color-danger); }
+.runner-file-btn:hover { background: var(--bg-active); }
+
+/* ==========================================================================
+   Tutorial (教程)
+   ========================================================================== */
+.tutorial-card { margin-bottom: 14px; }
+.tutorial-card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; cursor: pointer; user-select: none;
+    transition: background var(--transition);
+}
+.tutorial-card-header:hover { background: var(--bg-hover); }
+.tutorial-chevron { color: var(--text-tertiary); transition: transform var(--transition); font-size: 13px; }
+.tutorial-card.open .tutorial-chevron { transform: rotate(180deg); }
+.tutorial-card-body {
+    max-height: 0; overflow: hidden; padding: 0 20px;
+    transition: max-height var(--transition-slow), padding var(--transition-slow);
+}
+.tutorial-card.open .tutorial-card-body { max-height: 2400px; padding: 0 20px 20px; }
+.tutorial-item { padding: 10px 0; border-top: 1px solid var(--border-muted); }
+.tutorial-item:first-child { border-top: none; }
+.tutorial-item-title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;
+}
+.tutorial-dot { font-size: 6px; color: var(--color-primary); }
+.tutorial-text { font-size: 13px; color: var(--text-secondary); line-height: 1.7; margin: 0; }
+.tutorial-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tutorial-tag {
+    font-size: 12px; padding: 4px 10px; border-radius: var(--radius-full);
+    background: var(--bg-hover); color: var(--text-secondary);
+    border: 1px solid var(--border-muted);
+}
+
+/* ==========================================================================
    Responsive
    ========================================================================== */
 @media (max-width: 900px) {
@@ -1445,6 +1530,8 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
     .boot-logo { font-size: 9px; }
     .panel-detail-actions { width: 100%; }
     .panel-detail-actions .btn { flex: 1; }
+    .runner-cwd-timeout { flex-direction: column; }
+    .runner-timeout-group { width: 100%; }
 }
 /* ---- Announcements ---- */
 .ann-card {
@@ -1559,7 +1646,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
 |  __/| |_| | (__|   <  __/| | (_) | (_) || |
 |_|    \__,_|\___|_|\_\___||_|\___/ \___/ |_|
     </pre>
-    <div class="boot-version">Version <span id="bootVersion">v2.3.0</span></div>
+    <div class="boot-version">Version <span id="bootVersion">v2.4.0</span></div>
     <div class="boot-loader">
         <span class="dot"></span>
         <span class="dot"></span>
@@ -1656,7 +1743,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
         <div class="topbar-brand">
             <div class="brand-icon"><i class="fas fa-terminal"></i></div>
             <span class="brand-name">PocketTerm</span>
-            <span class="brand-version" id="topbarVersion">v2.3.0</span>
+            <span class="brand-version" id="topbarVersion">v2.4.0</span>
         </div>
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
@@ -1732,6 +1819,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
                 <div class="nav-item" data-view="runner" id="navRunner" style="display:none;">
                     <i class="fas fa-terminal nav-icon"></i>
                     <span class="nav-label">运行器</span>
+                </div>
+                <div class="nav-item" data-view="tutorial" id="navTutorial">
+                    <i class="fas fa-book-open nav-icon"></i>
+                    <span class="nav-label">教程</span>
                 </div>
             </div>
 
@@ -2839,50 +2930,185 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: var(-
             <div class="page-header">
                 <div>
                     <div class="page-title"><i class="fas fa-terminal"></i> 命令运行器</div>
-                    <div class="page-subtitle">执行脚本和命令，实时查看输出</div>
+                    <div class="page-subtitle">上传脚本并执行，实时查看输出</div>
                 </div>
                 <div class="page-actions">
-                    <button class="btn btn-secondary btn-sm" id="runnerRefreshFilesBtn"><i class="fas fa-sync-alt"></i> 刷新文件</button>
-                    <button class="btn btn-primary btn-sm" id="runnerUploadBtn"><i class="fas fa-upload"></i> 上传脚本</button>
+                    <button class="btn btn-secondary btn-sm" id="runnerRefreshFilesBtn"><i class="fas fa-sync-alt"></i> 刷新</button>
                 </div>
             </div>
-            <div class="dashboard-grid" style="grid-template-columns:1fr 1fr;gap:16px;">
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-keyboard"></i> 命令输入</div>
+
+            <!-- 文件管理 -->
+            <div class="card" style="margin-bottom:16px;">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-folder-open"></i> 文件管理</div>
+                </div>
+                <div class="card-body">
+                    <div id="runnerFilesList" class="runner-files-list"></div>
+                    <input type="file" id="runnerFileInput" style="display:none;" accept=".py,.go,.java,.js,.sh,.txt,.exe,.bin,.ts,.rb,.pl,.php,.rs,.c,.cpp">
+                    <button class="btn btn-primary btn-block runner-upload-btn" id="runnerUploadBtn" style="margin-top:12px;"><i class="fas fa-cloud-upload-alt"></i> 上传文件</button>
+                </div>
+            </div>
+
+            <!-- 命令执行 -->
+            <div class="card" style="margin-bottom:16px;">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-keyboard"></i> 命令执行</div>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label"><i class="fas fa-terminal"></i> 命令</label>
+                        <textarea class="form-input" id="runnerCommand" rows="3" placeholder="python3 script.py&#10;go run main.go&#10;./executable" style="font-family:monospace;font-size:14px;"></textarea>
                     </div>
-                    <div class="card-body">
-                        <div class="form-group">
+                    <div class="runner-cwd-timeout">
+                        <div class="form-group runner-cwd-group">
                             <label class="form-label"><i class="fas fa-folder"></i> 工作目录</label>
                             <input type="text" class="form-input" id="runnerCwd" value="/workspace" placeholder="/workspace">
                         </div>
-                        <div class="form-group">
-                            <label class="form-label"><i class="fas fa-clock"></i> 超时 (秒)</label>
-                            <input type="number" class="form-input" id="runnerTimeout" value="30" min="1" max="120" style="width:120px;">
+                        <div class="form-group runner-timeout-group">
+                            <label class="form-label"><i class="fas fa-clock"></i> 超时(秒)</label>
+                            <input type="number" class="form-input" id="runnerTimeout" value="30" min="1" max="120">
                         </div>
-                        <div class="form-group">
-                            <label class="form-label"><i class="fas fa-terminal"></i> 命令</label>
-                            <textarea class="form-input" id="runnerCommand" rows="3" placeholder="python3 script.py&#10;go run main.go&#10;java -jar app.jar&#10;./executable" style="font-family:monospace;font-size:13px;"></textarea>
-                        </div>
-                        <div style="display:flex;gap:8px;">
-                            <button class="btn btn-primary" id="runnerExecuteBtn"><i class="fas fa-play"></i> 执行</button>
-                            <button class="btn btn-danger" id="runnerStopBtn" disabled><i class="fas fa-stop"></i> 停止</button>
-                            <button class="btn btn-secondary" id="runnerClearBtn"><i class="fas fa-eraser"></i> 清屏</button>
-                        </div>
-                        <div style="margin-top:12px;">
-                            <label class="form-label"><i class="fas fa-file-code"></i> 脚本文件列表</label>
-                            <div id="runnerFilesList" style="max-height:200px;overflow-y:auto;border:1px solid var(--border-muted);border-radius:8px;padding:8px;"></div>
-                        </div>
-                        <input type="file" id="runnerFileInput" style="display:none;" accept=".py,.go,.java,.js,.sh,.txt,.exe,.bin">
+                    </div>
+                    <div class="runner-action-row">
+                        <button class="btn btn-primary runner-action-btn" id="runnerExecuteBtn"><i class="fas fa-play"></i> 执行</button>
+                        <button class="btn btn-danger runner-action-btn" id="runnerStopBtn" disabled><i class="fas fa-stop"></i> 停止</button>
+                        <button class="btn btn-secondary runner-action-btn" id="runnerClearBtn"><i class="fas fa-eraser"></i> 清屏</button>
                     </div>
                 </div>
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-stream"></i> 输出</div>
-                        <div id="runnerStatus" style="font-size:12px;color:var(--text-tertiary);">就绪</div>
+            </div>
+
+            <!-- 输出 -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-stream"></i> 输出</div>
+                    <div id="runnerStatus" class="runner-status">就绪</div>
+                </div>
+                <div class="card-body" style="padding:0;">
+                    <pre id="runnerOutput" class="runner-output"><span style="color:#586069;">$ 等待执行命令...</span></pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             View: Tutorial (教程)
+             ================================================================== -->
+        <section class="view" id="view-tutorial">
+            <div class="page-header">
+                <div>
+                    <div class="page-title"><i class="fas fa-book-open"></i> 使用教程</div>
+                    <div class="page-subtitle">快速了解 PocketTerm 的各项功能</div>
+                </div>
+            </div>
+
+            <!-- 板块1: 快速入门 -->
+            <div class="card tutorial-card">
+                <div class="tutorial-card-header" data-tutorial-toggle>
+                    <div class="card-title"><i class="fas fa-rocket"></i> 快速入门</div>
+                    <i class="fas fa-chevron-down tutorial-chevron"></i>
+                </div>
+                <div class="tutorial-card-body">
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 什么是 PocketTerm</div>
+                        <p class="tutorial-text">PocketTerm 是一个在线脚本运行与机器人管理平台。支持上传多种语言的脚本并实时查看运行输出，同时提供面板与机器人管理能力，方便你在手机上完成日常运维与自动化任务。</p>
                     </div>
-                    <div class="card-body" style="padding:0;">
-                        <pre id="runnerOutput" style="margin:0;padding:16px;max-height:500px;overflow-y:auto;background:#0d1117;color:#e6edf3;font-family:'Consolas','Monaco',monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all;border-radius:0 0 8px 8px;"><span style="color:#586069;">$ 等待执行命令...</span></pre>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何注册和登录</div>
+                        <p class="tutorial-text">打开应用后进入登录页，点击「注册」填写用户名与密码即可完成注册；已有账号直接输入用户名、密码登录即可进入控制台。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何创建面板</div>
+                        <p class="tutorial-text">登录后进入「面板」页面，点击「创建面板」按钮，填写面板名称等信息提交后即可创建属于自己的面板。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 板块2: 面板管理 -->
+            <div class="card tutorial-card">
+                <div class="tutorial-card-header" data-tutorial-toggle>
+                    <div class="card-title"><i class="fas fa-th-large"></i> 面板管理</div>
+                    <i class="fas fa-chevron-down tutorial-chevron"></i>
+                </div>
+                <div class="tutorial-card-body">
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何创建机器人</div>
+                        <p class="tutorial-text">进入面板详情页，点击「创建机器人」，选择账号来源并填写相关信息，提交后即可在面板下创建机器人。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> PE / PC 平台选择的区别</div>
+                        <p class="tutorial-text">PE 为口袋版（移动端）平台，PC 为电脑端平台。请根据你实际使用的游戏客户端选择对应平台，平台不匹配可能导致启动失败。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何启动机器人</div>
+                        <p class="tutorial-text">在面板详情页点击「启动」按钮即可启动机器人，启动后可在控制台查看实时日志输出，了解运行状态。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 常见错误码说明</div>
+                        <p class="tutorial-text"><strong>code=32</strong>：通常表示登录态失效或需要重新验证。请到「账号管理」中重新添加或刷新该账号后再尝试启动。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 板块3: 运行器使用 -->
+            <div class="card tutorial-card">
+                <div class="tutorial-card-header" data-tutorial-toggle>
+                    <div class="card-title"><i class="fas fa-terminal"></i> 运行器使用</div>
+                    <i class="fas fa-chevron-down tutorial-chevron"></i>
+                </div>
+                <div class="tutorial-card-body">
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 运行器是什么</div>
+                        <p class="tutorial-text">运行器是一个在线脚本执行环境，可上传脚本文件并执行命令，通过 WebSocket 实时返回 stdout / stderr 输出，方便在手机上直接运行和调试脚本。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 支持的文件类型</div>
+                        <div class="tutorial-tags">
+                            <span class="tutorial-tag">.py Python</span>
+                            <span class="tutorial-tag">.go Go</span>
+                            <span class="tutorial-tag">.java Java</span>
+                            <span class="tutorial-tag">.js Node.js</span>
+                            <span class="tutorial-tag">.sh Shell</span>
+                            <span class="tutorial-tag">.exe 可执行文件</span>
+                            <span class="tutorial-tag">.ts TypeScript</span>
+                            <span class="tutorial-tag">.rb Ruby</span>
+                            <span class="tutorial-tag">.pl Perl</span>
+                            <span class="tutorial-tag">.php PHP</span>
+                            <span class="tutorial-tag">.rs Rust</span>
+                            <span class="tutorial-tag">.c / .cpp C/C++</span>
+                        </div>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何上传文件</div>
+                        <p class="tutorial-text">在「文件管理」区域点击「上传文件」按钮，选择本地脚本即可上传。上传成功后会弹出提示显示文件名，文件会出现在列表中。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何运行文件</div>
+                        <p class="tutorial-text">点击文件名可自动根据扩展名填充命令到输入框；也可点击文件操作中的「运行」按钮直接执行；或在命令框中手动输入命令后点击「执行」。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何使用 WebSocket 实时输出</div>
+                        <p class="tutorial-text">执行命令后系统会自动通过 WebSocket 推送 stdout / stderr，实时显示在输出区。若 WebSocket 不可用，会自动回退到 HTTP 模式获取完整输出。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 文件管理操作</div>
+                        <p class="tutorial-text">每个文件支持以下操作：运行、下载、重命名、压缩、删除。点击文件条目上对应的按钮即可执行相应操作。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 板块4: 账号管理 -->
+            <div class="card tutorial-card">
+                <div class="tutorial-card-header" data-tutorial-toggle>
+                    <div class="card-title"><i class="fas fa-user-cog"></i> 账号管理</div>
+                    <i class="fas fa-chevron-down tutorial-chevron"></i>
+                </div>
+                <div class="tutorial-card-body">
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> 如何添加 4399 账号</div>
+                        <p class="tutorial-text">在账号管理中点击「添加账号」，填写 4399 账号信息并完成验证后即可添加。添加成功的账号可用于创建和启动机器人。</p>
+                    </div>
+                    <div class="tutorial-item">
+                        <div class="tutorial-item-title"><i class="fas fa-circle tutorial-dot"></i> sauth_json 自动刷新机制</div>
+                        <p class="tutorial-text">系统会自动维护 sauth_json 登录凭证，在临近过期时自动刷新，无需手动干预。若自动刷新失败，系统会提示你重新登录该账号以恢复凭证有效性。</p>
                     </div>
                 </div>
             </div>

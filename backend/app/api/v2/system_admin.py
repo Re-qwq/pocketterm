@@ -378,6 +378,9 @@ async def get_version():
                 "shop",
                 "announcements",
                 "super-admin",
+                "tutorial-page",
+                "sauth-auto-refresh",
+                "mobile-friendly",
             ],
         },
     }

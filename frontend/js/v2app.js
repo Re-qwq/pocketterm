@@ -909,6 +909,9 @@
             case "runner":
                 loadRunnerFiles();
                 break;
+            case "tutorial":
+                // 教程为纯静态内容，无需加载数据
+                break;
             case "admin-orders":
                 loadAdminOrders();
                 break;
@@ -4872,6 +4875,14 @@
                 handleRunnerExecute();
             }
         });
+
+        // ---- 教程卡片展开/折叠 ----
+        $$("[data-tutorial-toggle]").forEach((header) => {
+            header.addEventListener("click", () => {
+                const card = header.closest(".tutorial-card");
+                if (card) card.classList.toggle("open");
+            });
+        });
     }
 
     /* ======================================================================
@@ -5278,20 +5289,26 @@
             const container = $("runnerFilesList");
             if (!container) return;
             if (files.length === 0) {
-                container.innerHTML = '<div style="color:var(--text-tertiary);font-size:13px;text-align:center;padding:12px;">暂无脚本文件</div>';
+                container.innerHTML = '<div class="runner-empty">暂无脚本文件，点击下方「上传文件」开始</div>';
                 return;
             }
             container.innerHTML = files.map(f => {
                 const sizeStr = f.size > 1024 ? (f.size / 1024).toFixed(1) + ' KB' : f.size + ' B';
-                return `<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border-muted);font-size:13px;">
-                    <i class="fas ${f.is_dir ? 'fa-folder' : 'fa-file-code'}" style="color:var(--color-primary);"></i>
-                    <span style="flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="window.fillRunnerCommand('${escAttr(f.name)}')">${escapeHtml(f.name)}</span>
-                    <span style="color:var(--text-tertiary);font-size:11px;min-width:50px;text-align:right;">${sizeStr}</span>
-                    <div style="display:flex;gap:2px;">
-                        <button onclick="window.downloadRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-info);cursor:pointer;padding:2px 6px;" title="下载"><i class="fas fa-download"></i></button>
-                        <button onclick="window.renameRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-warning);cursor:pointer;padding:2px 6px;" title="重命名"><i class="fas fa-i-cursor"></i></button>
-                        <button onclick="window.compressRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-success);cursor:pointer;padding:2px 6px;" title="压缩"><i class="fas fa-file-archive"></i></button>
-                        <button onclick="window.deleteRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-danger);cursor:pointer;padding:2px 6px;" title="删除"><i class="fas fa-trash-alt"></i></button>
+                const fn = escAttr(f.name);
+                const safeName = escapeHtml(f.name);
+                const icon = f.is_dir ? 'fa-folder' : 'fa-file-code';
+                return `<div class="runner-file-item">
+                    <div class="runner-file-info">
+                        <i class="fas ${icon} runner-file-icon"></i>
+                        <span class="runner-file-name" onclick="window.fillRunnerCommand('${fn}')" title="${safeName}">${safeName}</span>
+                        <span class="runner-file-size">${sizeStr}</span>
+                    </div>
+                    <div class="runner-file-actions">
+                        <button class="runner-file-btn run" onclick="window.runRunnerFile('${fn}')" title="运行"><i class="fas fa-play"></i> 运行</button>
+                        <button class="runner-file-btn dl" onclick="window.downloadRunnerFile('${fn}')" title="下载"><i class="fas fa-download"></i></button>
+                        <button class="runner-file-btn rn" onclick="window.renameRunnerFile('${fn}')" title="重命名"><i class="fas fa-i-cursor"></i></button>
+                        <button class="runner-file-btn zip" onclick="window.compressRunnerFile('${fn}')" title="压缩"><i class="fas fa-file-archive"></i></button>
+                        <button class="runner-file-btn del" onclick="window.deleteRunnerFile('${fn}')" title="删除"><i class="fas fa-trash-alt"></i></button>
                     </div>
                 </div>`;
             }).join("");
@@ -5390,6 +5407,12 @@
             const runner = runners[ext] || '';
             cmdInput.value = runner ? runner + ' ' + filename : filename;
         }
+    };
+
+    window.runRunnerFile = function(filename) {
+        // 填充命令并立即执行
+        window.fillRunnerCommand(filename);
+        handleRunnerExecute();
     };
 
     async function handleRunnerUpload(e) {
