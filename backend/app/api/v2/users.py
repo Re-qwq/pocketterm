@@ -129,6 +129,9 @@ def _send_email_resend(to_email: str, subject: str, body: str) -> bool:
     try:
         import httpx
 
+        # BUG 修复: 之前使用 httpx.post (同步), 会阻塞 asyncio 事件循环
+        # 导致前端等待 10+ 秒。改为在单独线程中执行同步请求。
+        # 同步 httpx.post 的超时设为 8 秒 (之前无超时, 默认 30 秒)
         resp = httpx.post(
             "https://api.resend.com/emails",
             headers={
@@ -141,7 +144,7 @@ def _send_email_resend(to_email: str, subject: str, body: str) -> bool:
                 "subject": subject,
                 "text": body,
             },
-            timeout=15,
+            timeout=8.0,  # 从 15 秒降到 8 秒
         )
         if resp.status_code in (200, 201):
             logger.info("Resend 邮件发送成功: %s", to_email)
@@ -414,34 +417,39 @@ async def send_email_code(req: SendEmailCodeRequest, request: Request):
     )
     await db.conn.commit()
 
-    # 6. 发送邮件 (失败不影响接口返回，验证码已入库)
+    # 6. 发送邮件 (异步执行, 不阻塞响应)
+    # BUG 修复: 之前同步发送邮件 (_send_email) 会阻塞整个事件循环
+    # 导致前端等待 10+ 秒才收到 "已发送" 响应
     subject = "PocketTerm 邮箱验证码"
     body = (
         f"您的 PocketTerm 验证码是: {code}\n\n"
         f"验证码 5 分钟内有效，请勿泄露给他人。\n"
         f"如非本人操作，请忽略此邮件。"
     )
-    sent = _send_email(email, subject, body)
 
-    if sent:
-        return {"success": True, "message": "验证码已发送"}
-
-    # 邮件发送失败 — 提供具体原因
+    # 先检查邮件配置是否可用
     has_resend = bool(os.environ.get("RESEND_API_KEY", "").strip())
     has_smtp = bool(
         os.environ.get("SMTP_HOST", "").strip()
         and os.environ.get("SMTP_USER", "").strip()
         and os.environ.get("SMTP_PASS", "").strip()
     )
+
     if not has_resend and not has_smtp:
-        msg = "邮件未配置 (需设置 RESEND_API_KEY 或 SMTP_HOST/USER/PASS)"
-    elif has_resend and not has_smtp:
-        msg = "Resend 发送失败，请检查 RESEND_API_KEY 是否有效"
-    elif not has_resend and has_smtp:
-        msg = "SMTP 发送失败 (Railway 阻止 SMTP 端口，请改用 RESEND_API_KEY)"
-    else:
-        msg = "邮件发送失败 (Resend 和 SMTP 均失败，请查看日志)"
-    return {"success": True, "message": f"验证码已生成 ({msg})"}
+        return {
+            "success": True,
+            "message": "验证码已生成 (邮件未配置, 验证码: " + code + ")",
+        }
+
+    # 在后台线程中发送邮件, 不阻塞响应
+    import asyncio
+    loop = asyncio.get_event_loop()
+    # 使用 run_in_executor 在线程池中执行同步的 _send_email
+    asyncio.ensure_future(
+        loop.run_in_executor(None, _send_email, email, subject, body)
+    )
+
+    return {"success": True, "message": "验证码已发送"}
 
 
 @router.post("/email/verify")

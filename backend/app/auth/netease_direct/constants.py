@@ -97,23 +97,26 @@ KEYS_G79V12 = [
 # ---------------------------------------------------------------------------
 # 版本信息 (网易升级时修改这里)
 # ---------------------------------------------------------------------------
-# 当前版本: 3.8 (BE 1.21.90, 2026年5月)
-# 来源: TapTap 最新版本 3.8.25.293531, 网易开发者文档 V3.8
-# 网易3.9版本预计 2026年7月24日更新,届时需要修改以下常量
+# 当前版本: 3.9 (BE 1.21.120, 2026年7月24日更新)
+# 来源: Community-Bot 2026-07-22 release 逆向分析
+#   - sdk_version: "3.9.0" (sauth_json 中)
+#   - 基岩版协议: 1.21.120 (Community_Bot.exe ProtocolReader)
+#   - NtUniSdkMpay.DLL: 4.17.2.0
+#   - Git commit: 961c151d2e87f2686a955a9be24d316f1362bf21
 
 # 网易引擎版本 (用于 auth_entity.version.version 和 SA_DATA_PE.app_ver)
-ENGINE_VERSION = "3.8.25.293531"
-PATCH_VERSION = "3.8.25.293531"
+ENGINE_VERSION = "3.9.0"
+PATCH_VERSION = "3.9.0"
 LIB_MINECRAFT_PE = "de9c85e47c5bb586f689d813d45b12a7"  # 旧版哈希, sign 为空时不影响
 PATCH_HASH = "ba0dc911f785bc1026631b906070b6db2b3e7ca013bb30a74d822579860c042b"  # 旧版哈希
 
 # Minecraft Bedrock 游戏版本 (用于 Login 包的 protocol_version 字段)
-# 注意: 此值应与 constants/minecraft.py 的 GameVersion 保持一致
-GAME_VERSION = "1.21.90.0"
+# 来源: Community-Bot 2026-07-22 release, 基岩版协议 1.21.120
+GAME_VERSION = "1.21.120.0"
 
 # SDK 版本号 (用于 sauth_json 的 sdk_version 字段)
-# PC (x19) 模式使用, 来源: Drug.NetEase x19Auth.cs
-SDK_VERSION_PC = "3.4.0"
+# PC (x19) 模式使用, 来源: Community-Bot sauth_json 样本
+SDK_VERSION_PC = "3.9.0"
 # PE (g79) 模式使用, 来源: SA_DATA_PE.sdk_ver
 SDK_VERSION_PE = "5.2.0"
 
