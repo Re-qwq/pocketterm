@@ -68,14 +68,16 @@ def _load_jwt_secret() -> str:
 
         - 若环境变量已设置且非空，直接使用该值。
         - 若环境变量未设置:
-            * 生产环境 (``POCKETTERM_ENV=production``) 抛出 ``RuntimeError``，
-              拒绝启动，强制要求显式配置密钥。
+            * 生产环境 (``POCKETTERM_ENV=production``) 打印严重警告并使用
+              随机生成的临时密钥 (每次重启会变化, 已签发的 token 将失效),
+              不再直接抛 RuntimeError 以避免服务无法启动。
             * 开发环境使用内置的弱默认密钥并打印警告日志。
 
     Returns:
         JWT 签名密钥字符串。
     """
     import os
+    import secrets
 
     secret = os.environ.get("POCKETTERM_JWT_SECRET", "").strip()
     if secret:
@@ -83,10 +85,15 @@ def _load_jwt_secret() -> str:
 
     env = os.environ.get("POCKETTERM_ENV", "").strip().lower()
     if env == "production":
-        raise RuntimeError(
-            "生产环境 (POCKETTERM_ENV=production) 必须设置环境变量 "
-            "POCKETTERM_JWT_SECRET，拒绝以弱密钥启动。"
+        # 生产环境未设置 JWT 密钥: 生成随机临时密钥, 避免服务崩溃
+        # 但每次重启密钥会变化, 所有已登录用户的 token 将失效
+        temp_secret = secrets.token_hex(32)
+        logger.error(
+            "生产环境未设置 POCKETTERM_JWT_SECRET！使用随机临时密钥启动。"
+            "每次重启密钥会变化, 所有已登录用户的 token 将失效。"
+            "请尽快设置该环境变量以保证服务稳定性。"
         )
+        return temp_secret
 
     logger.warning(
         "未设置 POCKETTERM_JWT_SECRET 环境变量，开发环境使用弱默认密钥。"

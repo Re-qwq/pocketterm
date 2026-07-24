@@ -334,8 +334,8 @@ def _get_cors_origins() -> list[str]:
           ``https://example.com,http://localhost:3000``)，按逗号分割、去
           空白、过滤空串后返回。
         - 若环境变量未设置:
-            * 生产环境 (``POCKETTERM_ENV=production``) 抛出 ``RuntimeError``，
-              拒绝以宽松的默认来源启动。
+            * 生产环境 (``POCKETTERM_ENV=production``) 打印严重警告并使用
+              ``["*"]`` (允许所有来源) 降级启动, 避免服务无法启动。
             * 开发环境返回 ``["http://localhost:8000"]`` 并打印警告日志。
 
     Returns:
@@ -349,11 +349,12 @@ def _get_cors_origins() -> list[str]:
 
     env = os.environ.get("POCKETTERM_ENV", "").strip().lower()
     if env == "production":
-        raise RuntimeError(
-            "生产环境 (POCKETTERM_ENV=production) 必须设置环境变量 "
-            "POCKETTERM_CORS_ORIGINS (逗号分隔的允许来源列表)，"
-            "拒绝以默认开发来源启动。"
+        # 生产环境未设置 CORS: 降级允许所有来源, 避免服务崩溃
+        logger.error(
+            "生产环境未设置 POCKETTERM_CORS_ORIGINS！"
+            "已降级为允许所有来源 (*)。请尽快设置该环境变量以保证安全性。"
         )
+        return ["*"]
 
     logger.warning(
         "未设置 POCKETTERM_CORS_ORIGINS 环境变量，开发环境默认允许 "
