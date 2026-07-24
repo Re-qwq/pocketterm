@@ -5,8 +5,8 @@
   },
   "deploy": {
     "startCommand": "cd /app/backend && python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT",
-    "healthcheckPath": "/docs",
-    "healthcheckTimeout": 120,
+    "healthcheckPath": "/api/v2/system/version",
+    "healthcheckTimeout": 180,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5
   },

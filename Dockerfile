@@ -17,7 +17,6 @@ FROM python:3.10-slim
 # 环境变量
 # -----------------------------------------------------------------------------
 ENV PYTHONUNBUFFERED=1 \
-    PORT=8000 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -86,7 +85,7 @@ COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
 # -----------------------------------------------------------------------------
-# 暴露端口
+# 暴露端口 (Railway 会动态分配 PORT, EXPOSE 仅为文档目的)
 # -----------------------------------------------------------------------------
 EXPOSE 8000
 
