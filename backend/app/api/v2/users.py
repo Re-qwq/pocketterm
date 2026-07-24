@@ -21,7 +21,6 @@ from app.security import (
     check_anomaly,
     report_suspicious,
 )
-from .captcha import generate_captcha, verify_captcha
 
 logger = logging.getLogger("pocketterm.api.users")
 
@@ -36,8 +35,6 @@ class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=20, description="用户名")
     password: str = Field(..., min_length=6, max_length=100, description="密码")
     card_key: str = Field(..., description="注册卡密")
-    captcha_answer: str = Field(..., description="图形验证码答案")
-    captcha_id: str = Field(..., description="验证码 ID")
 
 
 class LoginRequest(BaseModel):
@@ -64,7 +61,7 @@ class CreateUserRequest(BaseModel):
 
 @router.post("/register")
 async def register(req: RegisterRequest, request: Request):
-    """用户注册（需要注册卡密 + 图形验证码）。"""
+    """用户注册（需要注册卡密）。"""
     client_ip = request.client.host if request.client else ""
 
     # 频率限制
@@ -73,12 +70,7 @@ async def register(req: RegisterRequest, request: Request):
 
     db = await get_db()
 
-    # 1. 验证图形验证码 (内置验证码系统)
-    if not verify_captcha(req.captcha_id, req.captcha_answer):
-        report_suspicious(f"register:{client_ip}")
-        raise HTTPException(status_code=400, detail="验证码错误或已过期")
-
-    # 2. 验证注册卡密
+    # 1. 验证注册卡密
     card = await db.get_card_by_key(req.card_key.upper())
     if card is None or card["key_type"] != "register":
         raise HTTPException(status_code=400, detail="卡密无效或类型不正确")
@@ -87,17 +79,17 @@ async def register(req: RegisterRequest, request: Request):
     if card["expires_at"] and card["expires_at"] < time.time():
         raise HTTPException(status_code=400, detail="卡密已过期")
 
-    # 3. 检查用户名是否已存在
+    # 2. 检查用户名是否已存在
     existing = await db.get_user_by_username(req.username)
     if existing:
         raise HTTPException(status_code=400, detail="用户名已存在")
 
-    # 4. 计算过期时间
+    # 3. 计算过期时间
     expire_at = None
     if card["duration_days"]:
         expire_at = time.time() + card["duration_days"] * 86400
 
-    # 5. 创建用户 (邮箱验证已移除, email/avatar 留空)
+    # 4. 创建用户 (邮箱验证已移除, email/avatar 留空)
     user_id = await db.create_user(
         username=req.username,
         password_hash=hash_password(req.password),
@@ -108,7 +100,7 @@ async def register(req: RegisterRequest, request: Request):
         avatar="",
     )
 
-    # 6. 标记卡密已使用 (失败则回滚用户创建)
+    # 5. 标记卡密已使用 (失败则回滚用户创建)
     try:
         await db.use_card(card["card_id"], user_id=user_id)
     except Exception as e:
@@ -121,7 +113,7 @@ async def register(req: RegisterRequest, request: Request):
             pass
         raise HTTPException(status_code=500, detail="注册失败: 卡密标记异常, 请联系管理员")
 
-    # 7. 记录日志
+    # 6. 记录日志
     await db.add_log(
         target_type="user", target_id=user_id,
         level="success", message=f"用户注册成功: {req.username}",
@@ -129,39 +121,6 @@ async def register(req: RegisterRequest, request: Request):
     )
 
     return {"success": True, "message": "注册成功", "data": {"user_id": user_id}}
-
-
-# ============================================================================
-# 获取验证码
-# ============================================================================
-
-@router.get("/captcha")
-async def get_captcha():
-    """获取注册验证码图片。"""
-    captcha_id, image_base64 = generate_captcha()
-    return {
-        "success": True,
-        "data": {
-            "captcha_id": captcha_id,
-            "image": f"data:image/png;base64,{image_base64}",
-        },
-    }
-
-
-@router.get("/captcha/debug")
-async def get_captcha_debug(captcha_id: str):
-    """调试用: 获取验证码答案 (仅开发环境, 生产环境自动禁用)。"""
-    import os
-    # 生产环境禁用此接口
-    if os.environ.get("POCKETTERM_ENV") == "production":
-        raise HTTPException(status_code=404, detail="接口不存在")
-    if not os.environ.get("POCKETTERM_DEBUG"):
-        raise HTTPException(status_code=404, detail="接口不存在")
-    from .captcha import _captcha_store
-    entry = _captcha_store.get(captcha_id)
-    if entry:
-        return {"success": True, "answer": entry["answer"]}
-    return {"success": False, "answer": None}
 
 
 # ============================================================================

@@ -258,7 +258,7 @@ class SauthRefresher:
                 "error": str(e),
             }
 
-        # 回退: OAuth2 流程 (4399com 频道, 可能遇到 code=32)
+        # 回退: OAuth2 流程 (4399 登录 → netease 频道转换)
         if sauth_str is None:
             logger.info(
                 f"回退到 OAuth2 流程 (账号: {account_username})"
@@ -322,7 +322,7 @@ class SauthRefresher:
     async def _refresh_via_mpay(
         self, username: str, password: str
     ) -> tuple[Optional[str], str]:
-        """非 OAuth2 流程: AES 加密密码 → login.do → checkKidLoginUserCookie → sdk/info → uni_sauth。
+        """非 OAuth2 流程: AES 加密密码 → login.do → checkKidLoginUserCookie → sdk/info → netease 转换。
 
         4399 的 login.do 在 sec=1 时要求密码使用 CryptoJS AES 加密
         (密钥: 'lzYW5qaXVqa', OpenSSL 格式)。
@@ -333,7 +333,8 @@ class SauthRefresher:
         - checkKidLoginUserCookie 必须带完整参数 (gameUrl/nick/onLineStart/show/isCrossDomain/retUrl)
         - sdk/info 的 queryStr 必须完整 URL 编码, 包含 nick/fcm/show/isCrossDomain/rand_time/ptusertype
         - SDK 响应中 sdk_login_data 是字符串 (token=XXX&sdkuid=YYY), 不是字典
-        - Step 7 使用 uni_sauth (不是 fever_to_sauth, 因为 SDK token 不是 MPay token)
+        - Step 7: 优先 fever_to_sauth 转换为 netease 频道, 失败则本地构建 netease sauth_json
+          (不再使用 4399pc 频道, 该频道已被网易废弃返回 code=32)
         - sauth_json 必须包含 realname/timestamp/userid 字段, 否则 uni_sauth 返回 502
 
         Returns:
@@ -623,8 +624,12 @@ class SauthRefresher:
                     logger.warning("未获取到 SDK token")
                     return None, ""
 
-                # Step 7: 构建 4399pc sauth_json
-                # 参考 account_register.py 的正确实现: 完整字段 + uni_sauth + login-otp
+                # Step 7: 转换为 netease 频道 (解决 4399pc code=32 问题)
+                # 4399pc 频道已被网易废弃, 改用 fever_to_sauth 转换为 netease 频道
+                from .netease_direct.fever_to_sauth import fever_to_sauth
+                from .netease_direct.login_4399_oauth2 import (
+                    build_sauth_json_netease as _build_netease_sauth,
+                )
                 import secrets as _secrets
 
                 _hex_chars = "0123456789ABCDEF"
@@ -633,35 +638,50 @@ class SauthRefresher:
                     "deviceid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
                     "udid": "".join(_secrets.choice(_hex_chars) for _ in range(32)),
                 }
-                _sauth_inner = {
-                    "aim_info": '{"aim":"127.0.0.1","country":"CN","tz":"+0800","tzid":""}',
-                    "app_channel": "4399pc",
-                    "client_login_sn": _fp["client_login_sn"],
-                    "deviceid": _fp["deviceid"],
-                    "gameid": "x19",
-                    "gas_token": "",
-                    "ip": "127.0.0.1",
-                    "login_channel": "4399pc",
-                    "platform": "pc",
-                    "realname": '{"realname_type":"0"}',
-                    "sdk_version": "1.0.0",
-                    "sdkuid": mpay_sdkuid,
-                    "sessionid": mpay_token,
-                    "source_platform": "pc",
-                    "timestamp": rand_time,
-                    "udid": _fp["udid"],
-                    "userid": username.lower(),
-                }
-                _sauth_inner_str = json.dumps(_sauth_inner, ensure_ascii=False)
-                _sauth_wrapped = json.dumps(
-                    {"sauth_json": _sauth_inner_str}, ensure_ascii=False
+
+                # 方案 1: 尝试 MPay fever_to_sauth 转换 (netease 频道)
+                _fever_result = await fever_to_sauth(
+                    sdkuid=mpay_sdkuid,
+                    sessionid=mpay_token,
+                    deviceid=_fp["deviceid"],
+                    use_random_udid=True,
+                )
+                self._last_refresh_debug["mpay_flow"]["fever_to_sauth"] = (
+                    _fever_result.get("success", False)
                 )
 
-                # Step 7a: uni_sauth (注册 4399pc 会话到网易统一认证)
-                # 关键修复: 必须先通过 uni_sauth 注册会话, login-otp 才能接受
-                # 参考 account_register.py step 9
-                # 重要: 使用独立的 client, 不带 4399 的 Referer/Origin headers
-                # (带 4399 Referer/Origin 会导致 uni_sauth 返回 502 external system error)
+                if _fever_result.get("success") and _fever_result.get("sauth_json"):
+                    # fever_to_sauth 成功, 直接使用返回的 netease sauth_json
+                    _sauth_str = _fever_result["sauth_json"]
+                    _sauth_data = json.loads(_sauth_str)
+                    _sauth_inner_str = _sauth_data.get("sauth_json", "")
+                    _sauth_wrapped = _sauth_str
+                    self._last_refresh_debug["mpay_flow"]["netease_method"] = (
+                        "fever_to_sauth"
+                    )
+                    logger.info(
+                        f"fever_to_sauth 转换成功 (netease, uid={mpay_sdkuid})"
+                    )
+                else:
+                    # 方案 2: 本地构建 netease 频道 sauth_json
+                    _sauth_inner = _build_netease_sauth(
+                        uid=mpay_sdkuid, device_fp=_fp
+                    )
+                    _sauth_inner_str = json.dumps(
+                        _sauth_inner, ensure_ascii=False
+                    )
+                    _sauth_wrapped = json.dumps(
+                        {"sauth_json": _sauth_inner_str}, ensure_ascii=False
+                    )
+                    self._last_refresh_debug["mpay_flow"]["netease_method"] = (
+                        "local_build"
+                    )
+                    logger.info(
+                        f"本地构建 netease sauth_json (uid={mpay_sdkuid})"
+                    )
+
+                # Step 7a: uni_sauth (注册 netease 会话到网易统一认证)
+                # 关键: 使用 netease 频道, 不再使用废弃的 4399pc 频道
                 _UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
                 _auth_headers = {
                     "User-Agent": "WPFLauncher/0.0.0.0",
@@ -718,13 +738,13 @@ class SauthRefresher:
                 )
 
                 if _otp_code == 0:
-                    logger.info(f"login-otp 成功 (4399pc 频道, 账号: {username})")
+                    logger.info(f"login-otp 成功 (netease 频道, 账号: {username})")
                     self._last_refresh_debug["mpay_flow"]["login_otp"] = "success"
-                    self._last_refresh_debug["final_channel"] = "4399pc"
+                    self._last_refresh_debug["final_channel"] = "netease"
                     return _sauth_wrapped, mpay_sdkuid
                 else:
                     logger.warning(
-                        f"login-otp 失败 (4399pc): code={_otp_code}, "
+                        f"login-otp 失败 (netease): code={_otp_code}, "
                         f"resp={_otp_resp.text[:200]}"
                     )
                     self._last_refresh_debug["mpay_flow"]["login_otp"] = "failed"
@@ -739,12 +759,12 @@ class SauthRefresher:
     async def _refresh_via_oauth2(
         self, username: str, password: str
     ) -> tuple[Optional[str], str]:
-        """OAuth2 流程 (回退方案): 构建 4399com 频道 sauth_json。
+        """OAuth2 流程: 4399 登录后转换为 netease 频道 sauth_json。
 
-        优化: 现在使用带随机设备指纹和完整字段的 build_sauth_json,
-        并检查 uni_sauth/login-otp 验证结果。
-
-        注意: 4399com 频道在 /login-otp 认证时可能返回 code=32。
+        底层 Login4399OAuth2.login() 已修改为:
+        1. 4399 OAuth2 登录获取 uid + state
+        2. 自动转换为 netease 频道 (fever_to_sauth 或本地构建)
+        3. uni_sauth + login-otp 验证 (netease 频道)
 
         Returns:
             (sauth_json, uid) 或 (None, "")
@@ -758,31 +778,35 @@ class SauthRefresher:
                 }
                 return None, ""
 
-            # 使用 result 中已构建好的 sauth_json (已包含随机设备指纹和完整字段)
+            # 使用 result 中已转换好的 netease 频道 sauth_json
             sauth_dict = result.sauth_json
             sauth_inner = json.dumps(sauth_dict, ensure_ascii=False)
             sauth_str = json.dumps(
                 {"sauth_json": sauth_inner}, ensure_ascii=False
             )
 
+            # 从 raw_cookie 中获取转换方法信息
+            conversion_method = result.raw_cookie.get("conversion_method", "unknown")
             if not self._last_refresh_debug.get("final_channel"):
-                self._last_refresh_debug["final_channel"] = "4399com"
+                self._last_refresh_debug["final_channel"] = "netease"
             self._last_refresh_debug["oauth2_flow"] = {
                 "status": "success",
                 "uid": result.uid,
                 "verified": result.verified,
                 "verification_code": result.verification_code,
+                "conversion_method": conversion_method,
             }
 
             # 记录验证状态
             if result.verified:
                 logger.info(
-                    f"OAuth2 流程验证成功 (4399com, uid={result.uid})"
+                    f"OAuth2 流程验证成功 (netease, uid={result.uid}, "
+                    f"method={conversion_method})"
                 )
             else:
                 logger.warning(
-                    f"OAuth2 流程验证未通过 (4399com, uid={result.uid}, "
-                    f"code={result.verification_code}), "
+                    f"OAuth2 流程验证未通过 (netease, uid={result.uid}, "
+                    f"code={result.verification_code}, method={conversion_method}), "
                     f"sauth_json 仍返回但可能无法用于 login-otp"
                 )
 

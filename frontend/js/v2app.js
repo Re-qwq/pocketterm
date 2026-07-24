@@ -109,7 +109,6 @@
         cardStats: null,              // 卡密统计
         panelDetail: null,            // 面板详情数据
         panelBot: null,               // 面板关联的机器人
-        captchaId: null,              // 当前验证码 ID
         consoleAutoscroll: true,      // 终端是否自动滚动
         confirmCallback: null,        // 确认对话框回调
         terminalHistory: [],          // 终端命令历史
@@ -622,32 +621,6 @@
         // 更新底部文字
         $("authFooterText").textContent = isLogin ? "还没有账号？" : "已有账号？";
         $("authToggle").textContent = isLogin ? "立即注册" : "立即登录";
-        // 切换到注册时自动加载验证码
-        if (!isLogin && !state.captchaId) {
-            loadCaptcha();
-        }
-    }
-
-    /**
-     * 加载图形验证码
-     */
-    async function loadCaptcha() {
-        const box = $("captchaImgBox");
-        try {
-            box.innerHTML = '<span class="captcha-placeholder">加载中...</span>';
-            const res = await api("/auth/captcha");
-            if (res.success && res.data) {
-                state.captchaId = res.data.captcha_id;
-                $("regCaptchaId").value = res.data.captcha_id;
-                // 兼容 data URL 与裸 base64
-                const imgSrc = res.data.image.startsWith("data:")
-                    ? res.data.image
-                    : `data:image/png;base64,${res.data.image}`;
-                box.innerHTML = `<img src="${imgSrc}" alt="验证码" />`;
-            }
-        } catch (_) {
-            box.innerHTML = '<span class="captcha-placeholder">加载失败，点击重试</span>';
-        }
     }
 
     /**
@@ -711,11 +684,9 @@
         const username = $("regUsername").value.trim();
         const password = $("regPassword").value;
         const cardKey = $("regCardKey").value.trim();
-        const captchaAnswer = $("regCaptchaInput").value.trim();
-        const captchaId = $("regCaptchaId").value;
         const btn = $("registerBtn");
 
-        if (!username || !password || !cardKey || !captchaAnswer) {
+        if (!username || !password || !cardKey) {
             toastWarn("请填写所有必填项");
             return;
         }
@@ -730,27 +701,21 @@
                     username,
                     password,
                     card_key: cardKey,
-                    captcha_answer: captchaAnswer,
-                    captcha_id: captchaId,
                 },
             });
             if (res.success) {
                 toastSuccess("注册成功，请登录");
                 // 清空注册表单
                 $("registerForm").reset();
-                state.captchaId = null;
                 // 切换到登录
                 switchAuthTab("login");
                 $("loginUsername").value = username;
                 $("loginPassword").focus();
             } else {
                 toastError(res.message || res.detail || "注册失败");
-                // 刷新验证码
-                loadCaptcha();
             }
         } catch (_) {
-            // 刷新验证码
-            loadCaptcha();
+            // 忽略未知错误 (api() 已做提示)
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-user-plus"></i> 注册';
@@ -4486,9 +4451,6 @@
             switchAuthTab(isLoginVisible ? "register" : "login");
         });
 
-        // ---- 验证码刷新 ----
-        $("captchaImgBox").addEventListener("click", loadCaptcha);
-
         // ---- 登录 / 注册表单 ----
         $("loginForm").addEventListener("submit", handleLogin);
         $("registerForm").addEventListener("submit", handleRegister);
@@ -5299,7 +5261,20 @@
     async function loadRunnerFiles() {
         try {
             const data = await api("/api/v2/runner/files");
-            const files = data.files || [];
+            // 后端返回 {"success": true, "data": {"/workspace": [...], "/data/user/work": [...], "__scripts_dir__": {"path":..., "files":[...]}}}
+            // 需要扁平化所有目录下的文件
+            const files = [];
+            const dirData = data.data || data;
+            if (dirData && typeof dirData === "object") {
+                for (const key of Object.keys(dirData)) {
+                    const val = dirData[key];
+                    if (Array.isArray(val)) {
+                        files.push(...val);
+                    } else if (val && Array.isArray(val.files)) {
+                        files.push(...val.files);
+                    }
+                }
+            }
             const container = $("runnerFilesList");
             if (!container) return;
             if (files.length === 0) {
@@ -5308,11 +5283,16 @@
             }
             container.innerHTML = files.map(f => {
                 const sizeStr = f.size > 1024 ? (f.size / 1024).toFixed(1) + ' KB' : f.size + ' B';
-                return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border-muted);font-size:13px;">
-                    <i class="fas fa-file-code" style="color:var(--color-primary);"></i>
+                return `<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border-muted);font-size:13px;">
+                    <i class="fas ${f.is_dir ? 'fa-folder' : 'fa-file-code'}" style="color:var(--color-primary);"></i>
                     <span style="flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="window.fillRunnerCommand('${escAttr(f.name)}')">${escapeHtml(f.name)}</span>
-                    <span style="color:var(--text-tertiary);font-size:11px;">${sizeStr}</span>
-                    <button onclick="window.deleteRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-danger);cursor:pointer;padding:2px 6px;" title="删除"><i class="fas fa-trash-alt"></i></button>
+                    <span style="color:var(--text-tertiary);font-size:11px;min-width:50px;text-align:right;">${sizeStr}</span>
+                    <div style="display:flex;gap:2px;">
+                        <button onclick="window.downloadRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-info);cursor:pointer;padding:2px 6px;" title="下载"><i class="fas fa-download"></i></button>
+                        <button onclick="window.renameRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-warning);cursor:pointer;padding:2px 6px;" title="重命名"><i class="fas fa-i-cursor"></i></button>
+                        <button onclick="window.compressRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-success);cursor:pointer;padding:2px 6px;" title="压缩"><i class="fas fa-file-archive"></i></button>
+                        <button onclick="window.deleteRunnerFile('${escAttr(f.name)}')" style="background:none;border:none;color:var(--color-danger);cursor:pointer;padding:2px 6px;" title="删除"><i class="fas fa-trash-alt"></i></button>
+                    </div>
                 </div>`;
             }).join("");
         } catch (e) {
@@ -5328,6 +5308,66 @@
             loadRunnerFiles();
         } catch (e) {
             toastError("删除失败: " + e.message);
+        }
+    };
+
+    window.downloadRunnerFile = async function(filename) {
+        try {
+            const token = state.token || localStorage.getItem(TOKEN_KEY) || "";
+            const resp = await fetch("/api/v2/runner/files/" + encodeURIComponent(filename) + "/download", {
+                headers: { "Authorization": "Bearer " + token },
+            });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.detail || err.message || "下载失败");
+            }
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            toastSuccess("下载已开始: " + filename);
+        } catch (e) {
+            toastError("下载失败: " + e.message);
+        }
+    };
+
+    window.renameRunnerFile = async function(filename) {
+        const newName = prompt("请输入新文件名:", filename);
+        if (!newName || newName === filename) return;
+        try {
+            await api("/api/v2/runner/files/" + encodeURIComponent(filename) + "/rename", {
+                method: "PUT",
+                body: JSON.stringify({ new_name: newName }),
+            });
+            toastSuccess("重命名成功: " + filename + " → " + newName);
+            loadRunnerFiles();
+        } catch (e) {
+            toastError("重命名失败: " + e.message);
+        }
+    };
+
+    window.compressRunnerFile = async function(filename) {
+        toastInfo("正在压缩: " + filename + " ...");
+        try {
+            const data = await api("/api/v2/runner/files/" + encodeURIComponent(filename) + "/compress", {
+                method: "POST",
+            });
+            if (data.success) {
+                const zipName = data.data?.filename || (filename + ".zip");
+                const zipSize = data.data?.size || 0;
+                const sizeStr = zipSize > 1024 ? (zipSize / 1024).toFixed(1) + ' KB' : zipSize + ' B';
+                toastSuccess("压缩成功: " + zipName + " (" + sizeStr + ")");
+                loadRunnerFiles();
+            } else {
+                throw new Error(data.detail || data.message || "压缩失败");
+            }
+        } catch (e) {
+            toastError("压缩失败: " + e.message);
         }
     };
 
@@ -5358,7 +5398,7 @@
         const formData = new FormData();
         formData.append("file", file);
         try {
-            const token = state.token || localStorage.getItem("pt_token") || "";
+            const token = state.token || localStorage.getItem(TOKEN_KEY) || "";
             const resp = await fetch("/api/v2/runner/upload", {
                 method: "POST",
                 headers: { "Authorization": "Bearer " + token },
@@ -5366,7 +5406,7 @@
             });
             const data = await resp.json();
             if (data.success) {
-                toastSuccess("上传成功: " + data.filename);
+                toastSuccess("上传成功: " + (data.data?.filename || data.filename || ""));
                 loadRunnerFiles();
             } else {
                 toastError("上传失败: " + (data.detail || data.message || "未知错误"));
@@ -5412,9 +5452,9 @@
                     appendRunnerOutput(msg.data, "stdout");
                 } else if (msg.type === "stderr") {
                     appendRunnerOutput(msg.data, "stderr");
-                } else if (msg.type === "exit") {
-                    appendRunnerOutput(`\n[进程退出, code=${msg.code}, 耗时 ${msg.duration}s]`, "exit");
-                    finishRunner(msg.code);
+                } else if (msg.type === "exited") {
+                    appendRunnerOutput(`\n[进程退出, code=${msg.exit_code}, 耗时 ${msg.duration}s]`, "exit");
+                    finishRunner(msg.exit_code);
                 } else if (msg.type === "error") {
                     appendRunnerOutput("错误: " + msg.message, "stderr");
                     finishRunner(-1);

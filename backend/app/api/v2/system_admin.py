@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -369,12 +368,16 @@ async def get_version():
                 "bot-management",
                 "plugin-system",
                 "file-management",
+                "file-rename",
+                "file-compress",
+                "file-download",
                 "command-runner",
                 "pe-pc-switch",
                 "ban-detection",
                 "nv1-sauth",
                 "shop",
                 "announcements",
+                "super-admin",
             ],
         },
     }

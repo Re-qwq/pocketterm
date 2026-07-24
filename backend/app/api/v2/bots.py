@@ -133,7 +133,6 @@ async def _build_bot_config(bot, db):
             fresh_sauth = await sauth_refresher.get_fresh_sauth()
             if fresh_sauth:
                 bot_config_data["sauth_json"] = fresh_sauth
-                print(f"  [DEBUG] _build_bot_config: sauth_json已刷新, 长度={len(fresh_sauth)}", flush=True)
                 logger.info(
                     f"机器人 {bot['name']} sauth_json 已通过 "
                     f"SauthRefresher 自动刷新"
@@ -152,7 +151,6 @@ async def _build_bot_config(bot, db):
                     except Exception:
                         logger.debug("回写刷新后的 sauth_json 到账号 metadata 失败", exc_info=True)
             else:
-                print(f"  [DEBUG] _build_bot_config: sauth_json刷新失败 (返回None)", flush=True)
                 logger.warning(
                     f"机器人 {bot['name']} sauth_json 已过期或缺失, 但自动刷新失败"
                     f" (无可用 4399 账号或登录失败)"
@@ -207,7 +205,7 @@ async def _build_bot_config(bot, db):
         except Exception as e:
             logger.warning(f"PE 端 sauth_json 转换失败: {e}")
 
-    print(f"  [DEBUG] _build_bot_config 完成: server_code={_svcode!r}, ap_type={_aptype!r}, platform={_ptype!r}, sauth_json长度={len(_sauth) if _sauth else 0}, auth_method={bot_config_data.get('auth_method','?')}", flush=True)
+    logger.debug(f"_build_bot_config 完成: server_code={_svcode!r}, ap_type={_aptype!r}, platform={_ptype!r}, sauth_json长度={len(_sauth) if _sauth else 0}, auth_method={bot_config_data.get('auth_method','?')}")
 
     return BotConfig(
         name=bot_config_data.get("name", ""),
@@ -361,7 +359,7 @@ async def list_accounts(request: Request):
     rows = await (await db.conn.execute(
         "SELECT account_id, username, player_name, status, last_used_at "
         "FROM accounts WHERE status = 'active' "
-        "ORDER BY last_used_at DESC NULLS LAST"
+        "ORDER BY last_used_at IS NULL, last_used_at DESC"
     )).fetchall()
 
     # 如果没有 accounts 表数据，返回空列表

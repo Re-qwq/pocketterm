@@ -34,6 +34,7 @@ import json
 import os
 import signal
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,6 +50,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.logger import get_logger
@@ -155,6 +157,17 @@ class ExecuteRequest(BaseModel):
     )
     timeout: int = Field(
         DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT, description="超时秒数 (1-120)"
+    )
+
+
+class RenameRequest(BaseModel):
+    """重命名请求体。
+
+    ``new_name`` 为清洗后的新文件名 (仅 basename, 不允许包含路径分隔符)。
+    """
+
+    new_name: str = Field(
+        ..., max_length=255, description="新文件名 (仅 basename)"
     )
 
 
@@ -723,7 +736,204 @@ async def delete_script(filename: str, request: Request):
 
 
 # ============================================================================
-# 5. WebSocket /ws - 实时输出
+# 5. PUT /files/{filename}/rename - 重命名文件
+# ============================================================================
+
+@router.put("/files/{filename}/rename")
+async def rename_script(
+    filename: str,
+    req: RenameRequest,
+    request: Request,
+    overwrite: bool = Query(False, description="目标已存在时是否覆盖"),
+):
+    """重命名脚本目录下的文件 (仅管理员)。
+
+    将 ``filename`` 重命名为 ``req.new_name``, 两者均位于脚本目录下。
+    若目标文件已存在, 需显式设置 ``overwrite=true`` 才能覆盖。
+    """
+    from .auth import require_admin
+    admin = await require_admin(request)
+
+    old_name = _safe_filename(filename)
+    new_name = _safe_filename(req.new_name)
+
+    scripts = _ensure_scripts_dir()
+    src = (scripts / old_name).resolve()
+    if not _is_safe_path(src, must_exist=True):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"文件不存在: {old_name}",
+        )
+    if not src.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"仅支持重命名文件: {old_name}",
+        )
+
+    dst = (scripts / new_name).resolve()
+    if not _is_safe_path(dst):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法的目标文件路径",
+        )
+    if dst != src and dst.exists() and not overwrite:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"目标文件已存在: {new_name} (可设置 overwrite=true 覆盖)",
+        )
+
+    try:
+        os.rename(src, dst)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"重命名文件失败: {exc}",
+        )
+
+    logger.info(f"管理员 {admin['username']} 重命名文件 {old_name} -> {new_name}")
+
+    return {
+        "success": True,
+        "data": {
+            "old_name": old_name,
+            "new_name": new_name,
+            "path": str(dst),
+        },
+    }
+
+
+# ============================================================================
+# 6. GET /files/{filename}/download - 下载文件
+# ============================================================================
+
+@router.get("/files/{filename}/download")
+async def download_script(filename: str, request: Request):
+    """下载文件 (仅管理员)。
+
+    在脚本目录及允许根目录下查找 ``filename``, 找到后以附件形式返回文件流。
+    """
+    from .auth import require_admin
+    admin = await require_admin(request)
+
+    safe_name = _safe_filename(filename)
+
+    # 依次在 SCRIPTS_DIR 和 ALLOWED_ROOTS 中查找文件
+    target: Optional[Path] = None
+    scripts = _ensure_scripts_dir()
+    candidates: List[Path] = [(scripts / safe_name).resolve()]
+    for root in ALLOWED_ROOTS:
+        candidates.append((root / safe_name).resolve())
+
+    for cand in candidates:
+        if cand.is_file() and _is_safe_path(cand, must_exist=True):
+            target = cand
+            break
+
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"文件不存在: {safe_name}",
+        )
+
+    logger.info(f"管理员 {admin['username']} 下载文件 {filename}")
+
+    return FileResponse(
+        path=str(target),
+        filename=safe_name,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
+
+
+# ============================================================================
+# 7. POST /files/{filename}/compress - 压缩文件或目录
+# ============================================================================
+
+@router.post("/files/{filename}/compress")
+async def compress_file(filename: str, request: Request):
+    """压缩文件或目录为同名 ``.zip`` 压缩包 (仅管理员)。
+
+    在允许根目录 (含脚本目录) 下查找 ``filename``:
+
+        * 若为文件, 直接打包该文件
+        * 若为目录, 递归打包整个目录 (保留相对目录结构)
+
+    压缩包生成在源文件所在目录下, 文件名为 ``{filename}.zip``。
+    """
+    from .auth import require_admin
+    admin = await require_admin(request)
+
+    safe_name = _safe_filename(filename)
+
+    # 在 ALLOWED_ROOTS (含 SCRIPTS_DIR) 下查找文件 / 目录
+    target: Optional[Path] = None
+    scripts = _ensure_scripts_dir()
+    search_roots: List[Path] = [scripts] + list(ALLOWED_ROOTS)
+    for root in search_roots:
+        cand = (root / safe_name).resolve()
+        if cand.exists() and _is_safe_path(cand, must_exist=True):
+            target = cand
+            break
+
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"文件或目录不存在: {safe_name}",
+        )
+
+    # 压缩包输出路径 (同名 .zip, 位于源文件同级目录)
+    zip_name = f"{safe_name}.zip"
+    zip_path = (target.parent / zip_name).resolve()
+    if not _is_safe_path(zip_path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法的压缩包输出路径",
+        )
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            if target.is_file():
+                # 打包单个文件, 归档名为原文件名
+                zf.write(target, arcname=safe_name)
+            elif target.is_dir():
+                # 递归打包目录, 归档路径相对父目录 (保留顶层目录名)
+                for child in target.rglob("*"):
+                    if child.is_file():
+                        arc = child.relative_to(target.parent)
+                        zf.write(child, arcname=str(arc))
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"不支持的文件类型: {safe_name}",
+                )
+    except HTTPException:
+        raise
+    except OSError as exc:
+        # 压缩失败时清理可能生成的半成品文件
+        try:
+            zip_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"压缩失败: {exc}",
+        )
+
+    size = zip_path.stat().st_size
+    logger.info(f"管理员 {admin['username']} 压缩文件 {filename}")
+
+    return {
+        "success": True,
+        "data": {
+            "filename": zip_name,
+            "path": str(zip_path),
+            "size": size,
+        },
+    }
+
+
+# ============================================================================
+# 8. WebSocket /ws - 实时输出
 # ============================================================================
 
 async def _authenticate_ws(token: str) -> Optional[dict]:

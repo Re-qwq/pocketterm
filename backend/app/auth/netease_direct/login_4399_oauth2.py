@@ -1,4 +1,4 @@
-"""4399 OAuth2 认证流程 (WPFLauncher_Hook 方案)。
+"""4399 OAuth2 认证流程 (WPFLauncher_Hook 方案 + netease 频道转换)。
 
 逆向来源:
   - WPFLauncher_Hook/Mcl.Core/Dotnetdetour/Tools/4399Login.cs
@@ -9,11 +9,14 @@
   2. 获取 OAuth 参数 → m.4399api.com/openapi/oauth-callback.html
   3. 登录并授权 → ptlogin.4399.com/oauth2/loginAndAuthorize.do (不跟随重定向)
   4. OAuth 回调 → GET Location URL, 获取 uid 和 state
-  5. 构建 sauth_json (4399com 频道)
-  6. 提交 uni_sauth (可选验证)
+  5. 转换为 netease 频道 (解决 code=32 问题):
+     a. 优先: MPay fever_to_sauth 转换 (create_ticket + login/ticket)
+     b. 回退: 本地构建 netease 频道 sauth_json (Fatalder 格式 sessionid)
+  6. 提交 uni_sauth 验证 (netease 频道)
 
 关键发现:
-  - 此流程完全绕过失效的 checkKidLoginUserCookie.do 和 sdk/info 端点
+  - 4399com 频道已被网易废弃, uni_sauth 返回 code=32
+  - 转换为 netease 频道后可正常通过 uni_sauth 和 login-otp 验证
   - 密码明文提交 (sec=0)
   - 验证码必须 (每次随机生成)
   - captchaId 格式: UUID4 去连字符转大写 (32位hex)
@@ -71,6 +74,13 @@ LOGIN_OTP_URL = "https://x19obtcore.nie.netease.com:8443/login-otp"
 GAME_ID = "x19"
 CHANNEL = "4399com"
 PLATFORM = "ad"
+
+# Netease 频道常量 (替代已废弃的 4399com 频道, 解决 code=32 问题)
+# 4399com/4399pc 频道已被网易废弃, uni_sauth 返回 code=32
+# 改用 netease 频道 (与 Community-Bot / Phoenix 访客认证一致)
+NETEASE_CHANNEL = "netease"
+NETEASE_PLATFORM = "pc"
+NETEASE_SDK_VERSION = "3.9.0"  # 匹配 Community-Bot 真实样本
 
 # WPFLauncher User-Agent (用于网易端点请求, 不带 4399 Referer/Origin)
 NETEASE_UA = "WPFLauncher/0.0.0.0"
@@ -390,6 +400,121 @@ def build_sauth_json(
     }
 
 
+def build_sauth_json_netease(
+    uid: str,
+    username: str = "",
+    device_fp: Optional[dict] = None,
+) -> dict:
+    """构建 netease 频道 sauth_json (绕过 code=32 问题)。
+
+    4399com/4399pc 频道已被网易废弃, uni_sauth 返回 code=32。
+    本函数使用 netease 频道构建 sauth_json, 与 Community-Bot 真实样本格式一致。
+
+    关键差异 (vs build_sauth_json):
+        - app_channel/login_channel: "netease" (非 "4399com")
+        - platform: "pc" (非 "ad")
+        - sdk_version: "3.9.0" (非 "1.0.0")
+        - sessionid: Fatalder 格式 (非 4399 OAuth state)
+        - 不包含 realname/source_app_channel (netease 频道不需要)
+
+    Args:
+        uid: 4399 用户 UID (从 OAuth2 回调获取)。
+        username: 4399 用户名 (可选)。
+        device_fp: 设备指纹 (可选, 默认随机生成)。
+
+    Returns:
+        sauth_json 字典 (netease 频道)。
+    """
+    fp = device_fp or generate_device_fingerprint()
+    # 使用 Fatalder 格式 sessionid (与 Phoenix 访客认证一致)
+    # 不使用 4399 OAuth state, 因为它绑定 4399com 频道
+    from app.auth.sauth_builder import build_sessionid
+    sessionid = build_sessionid(uid, fp["deviceid"])
+
+    aim_info = json.dumps({
+        "aim": "127.0.0.1",
+        "country": "CN",
+        "tz": "+0800",
+        "tzid": "Asia/Shanghai",
+    }, ensure_ascii=False)
+
+    return {
+        "aim_info": aim_info,
+        "app_channel": NETEASE_CHANNEL,
+        "platform": NETEASE_PLATFORM,
+        "client_login_sn": fp["client_login_sn"],
+        "deviceid": fp["deviceid"],
+        "gameid": GAME_ID,
+        "gas_token": "",
+        "ip": "127.0.0.1",
+        "login_channel": NETEASE_CHANNEL,
+        "sdk_version": NETEASE_SDK_VERSION,
+        "sdkuid": uid,
+        "sessionid": sessionid,
+        "source_platform": NETEASE_PLATFORM,
+        "udid": fp["udid"],
+    }
+
+
+async def convert_to_netease_channel(
+    uid: str,
+    access_token: str,
+    device_fp: Optional[dict] = None,
+) -> dict:
+    """将 4399 OAuth2 凭证转换为 netease 频道 sauth_json。
+
+    优先尝试 MPay fever_to_sauth 转换 (通过 create_ticket + login/ticket
+    获取新的 netease sessionid), 失败则回退到本地构建 netease sauth_json。
+
+    Args:
+        uid: 4399 用户 UID。
+        access_token: 4399 OAuth2 access_token (从 state 中提取)。
+        device_fp: 设备指纹 (可选)。
+
+    Returns:
+        dict: {"success": bool, "sauth_json": dict, "method": str, "message": str}
+    """
+    fp = device_fp or generate_device_fingerprint()
+    deviceid = fp["deviceid"]
+
+    # 方案 1: 尝试 MPay fever_to_sauth 转换
+    try:
+        from .fever_to_sauth import fever_to_sauth
+        result = await fever_to_sauth(
+            sdkuid=uid,
+            sessionid=access_token,
+            deviceid=deviceid,
+            use_random_udid=True,
+        )
+        if result.get("success") and result.get("sauth_json"):
+            # 解析返回的 sauth_json
+            sauth_data = json.loads(result["sauth_json"])
+            inner = sauth_data.get("sauth_json", "")
+            if inner:
+                inner_dict = json.loads(inner)
+                logger.info(
+                    f"fever_to_sauth 转换成功 (netease 频道, uid={uid})"
+                )
+                return {
+                    "success": True,
+                    "sauth_json": inner_dict,
+                    "method": "fever_to_sauth",
+                    "message": "MPay 转换成功",
+                }
+    except Exception as e:
+        logger.warning(f"fever_to_sauth 转换失败: {e}, 尝试本地构建")
+
+    # 方案 2: 本地构建 netease 频道 sauth_json
+    sauth_dict = build_sauth_json_netease(uid, device_fp=fp)
+    logger.info(f"本地构建 netease 频道 sauth_json (uid={uid})")
+    return {
+        "success": True,
+        "sauth_json": sauth_dict,
+        "method": "local_build",
+        "message": "本地构建 netease 频道 sauth_json",
+    }
+
+
 async def _post_uni_sauth(sauth_json_str: str) -> dict:
     """POST sauth_json 到 uni_sauth (网易统一认证)。
 
@@ -577,20 +702,32 @@ class Login4399OAuth2:
                 if not uid:
                     return None
 
-                # 构建 sauth_json (使用随机设备指纹, 防封优化)
-                device_fp = generate_device_fingerprint()
-                sauth_json = build_sauth_json(
-                    uid, state, username=username, device_fp=device_fp
-                )
-
                 # 提取 access_token (从 state 中解析)
+                # state 格式: uid|access_token|gamekey||state|hash|expire|channel
                 token = ""
                 if state and "|" in state:
                     parts = state.split("|")
                     if len(parts) > 1:
                         token = parts[1]
 
-                # Step 6: uni_sauth 验证 (不再忽略失败)
+                # 生成设备指纹 (用于两种频道的 sauth_json)
+                device_fp = generate_device_fingerprint()
+
+                # === 核心修复: 转换为 netease 频道 (解决 code=32) ===
+                # 4399com 频道已被网易废弃, uni_sauth 返回 code=32
+                # 优先尝试 MPay fever_to_sauth 转换, 失败则本地构建 netease sauth_json
+                netease_result = await convert_to_netease_channel(
+                    uid, token, device_fp=device_fp
+                )
+                sauth_json = netease_result["sauth_json"]
+                conversion_method = netease_result["method"]
+
+                logger.info(
+                    f"认证频道转换完成: {conversion_method} "
+                    f"(uid={uid}, channel=netease)"
+                )
+
+                # Step 6: uni_sauth 验证 (netease 频道)
                 verified = False
                 verification_code = -1
                 try:
@@ -600,7 +737,8 @@ class Login4399OAuth2:
 
                     if verification_code == 0:
                         logger.info(
-                            f"uni_sauth 验证成功 (4399com, uid={uid})"
+                            f"uni_sauth 验证成功 (netease, uid={uid}, "
+                            f"method={conversion_method})"
                         )
                         # Step 7: login-otp 最终验证
                         sauth_wrapped = json.dumps(
@@ -611,7 +749,7 @@ class Login4399OAuth2:
 
                         if otp_code == 0:
                             logger.info(
-                                f"login-otp 验证成功 (4399com, uid={uid})"
+                                f"login-otp 验证成功 (netease, uid={uid})"
                             )
                             verified = True
                         else:
@@ -619,11 +757,9 @@ class Login4399OAuth2:
                                 f"login-otp 验证失败: code={otp_code}, "
                                 f"resp={str(otp_resp)[:200]}"
                             )
-                            # login-otp 失败仍返回结果 (4399com 频道可能 code=32)
-                            # 调用方可根据 verified 字段决定是否使用
                     elif verification_code == 32:
                         logger.warning(
-                            f"uni_sauth 返回 code=32 (4399com 频道可能已失效), "
+                            f"uni_sauth 返回 code=32 (netease 频道也可能受限), "
                             f"uid={uid}"
                         )
                     else:
@@ -644,6 +780,8 @@ class Login4399OAuth2:
                         "uid": uid,
                         "state": state,
                         "username": username,
+                        "channel": "netease",
+                        "conversion_method": conversion_method,
                     },
                     verified=verified,
                     verification_code=verification_code,
