@@ -27,9 +27,15 @@ from .constants import KEYS, KEYS_G79V3, KEYS_G79V12, DYNAMIC_TOKEN_SALT
 # AES-CBC 加密/解密
 # ---------------------------------------------------------------------------
 
-# BUG-2.6 修复: 将密钥选择器后缀从魔数 0x0C 提取为命名常量, 提高可读性。
-# 该值来自 IL 反编译: key_selector = (rand(0,15) << 4) | 0x0C
-KEY_SELECTOR_SUFFIX: int = 0x0C
+# BUG-2.6 修复: 不同密钥集使用不同的标志字节后缀
+# 来源: InfBotLobby openssl_.h 和 nemc_crypto/x19crypt.py 交叉验证
+#   - x19 (KEYS):         后缀 0x02
+#   - g79v3 (KEYS_G79V3): 后缀 0x03
+#   - g79v12 (KEYS_G79V12): 后缀 0x0C
+# 之前所有密钥集统一使用 0x0C, 导致 x19 加密的标志字节错误
+KEY_SELECTOR_SUFFIX_X19: int = 0x02
+KEY_SELECTOR_SUFFIX_G79V3: int = 0x03
+KEY_SELECTOR_SUFFIX_G79V12: int = 0x0C
 
 def _xor_bytes(a: bytes, b: bytes) -> bytes:
     """XOR 两个等长字节串"""
@@ -147,10 +153,16 @@ def http_encrypt(body: bytes, key_set: Optional[list[str]] = None) -> bytes:
     # 6. 生成随机 IV (16 字节 ASCII)
     iv = _rand_ascii_string(16)
 
-    # 7. 生成随机密钥选择器 (来自 IL: (rand(0,15) << 4) | 0x0c)
+    # 7. 生成随机密钥选择器
+    # BUG 修复: x19 用 0x02, g79v3 用 0x03, g79v12 用 0x0C
+    # 来源: InfBotLobby openssl_.h + nemc_crypto/x19crypt.py 交叉验证
     key_index = random.randint(0, 15)
-    # BUG-2.6 修复: 使用命名常量替代魔数 0x0C
-    key_selector = (key_index << 4) | KEY_SELECTOR_SUFFIX
+    if key_set == KEYS_G79V12:
+        key_selector = (key_index << 4) | KEY_SELECTOR_SUFFIX_G79V12
+    elif key_set == KEYS_G79V3:
+        key_selector = (key_index << 4) | KEY_SELECTOR_SUFFIX_G79V3
+    else:
+        key_selector = (key_index << 4) | KEY_SELECTOR_SUFFIX_X19
 
     # 8. 获取密钥并加密 (g79v12 用 hex 解码, 其他用 UTF-8)
     key_str = key_set[key_index]
@@ -318,9 +330,11 @@ def compute_dynamic_token(path: str, body: str, token: str) -> str:
         byte_val = int(chunk, 2)
         V_1[i] ^= byte_val
 
-    # 7. Base64 编码, 截取前16字符, 替换特殊字符, 加前缀 "1"
+    # 7. Base64 编码, 截取前16字符, 替换特殊字符, 末尾追加 "1"
+    # BUG 修复: "1" 应在末尾追加, 而非开头前缀
+    # 来源: InfBotLobby openssl_.h (d = d + "1") 和 nemc_crypto/x19crypt.py 一致
     b64 = base64.b64encode(bytes(V_1)).decode("ascii")
-    token_result = "1" + b64[:16].replace("+", "m").replace("/", "o")
+    token_result = b64[:16].replace("+", "m").replace("/", "o") + "1"
 
     return token_result
 
@@ -374,9 +388,10 @@ def compute_dynamic_token_auth(path: str, body: str, token_bytes: bytes) -> str:
         byte_val = int(chunk, 2)
         V_1[i] ^= byte_val
 
-    # 7. Base64 编码, 截取前16字符, 替换特殊字符, 加前缀 "1"
+    # 7. Base64 编码, 截取前16字符, 替换特殊字符, 末尾追加 "1"
+    # BUG 修复: "1" 应在末尾追加 (与 compute_dynamic_token 一致)
     b64 = base64.b64encode(bytes(V_1)).decode("ascii")
-    token_result = "1" + b64[:16].replace("+", "m").replace("/", "o")
+    token_result = b64[:16].replace("+", "m").replace("/", "o") + "1"
 
     # 8. 将结果 hex 编码 (对应 ToHex(ASCII.GetBytes(result), true))
     #    FastBuilder: user-token = ToHex(Encoding.ASCII.GetBytes(token_result), uppercase)
