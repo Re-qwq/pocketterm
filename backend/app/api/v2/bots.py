@@ -27,6 +27,7 @@ class CreateBotRequest(BaseModel):
     server_code: str = Field("", max_length=64, description="租赁服编号")
     server_type: str = Field("rental", max_length=32, description="服务器类型: rental/private")
     access_point_type: str = Field("neomega", max_length=32, description="接入点类型")
+    platform_type: str = Field("pc", max_length=8, description="客户端平台: pc/pe (PE=手机端)")
     config: dict = Field(default_factory=dict, description="额外配置")
 
 
@@ -36,6 +37,7 @@ class UpdateBotConfigRequest(BaseModel):
     server_code: Optional[str] = Field(None, max_length=64, description="租赁服编号")
     server_type: Optional[str] = Field(None, max_length=32, description="服务器类型")
     access_point_type: Optional[str] = Field(None, max_length=32, description="接入点类型")
+    platform_type: Optional[str] = Field(None, max_length=8, description="客户端平台: pc/pe")
     game_version: Optional[str] = Field(None, max_length=32, description="游戏版本")
     config: Optional[dict] = None
 
@@ -177,7 +179,35 @@ async def _build_bot_config(bot, db):
     _sauth = bot_config_data.get("sauth_json", "")
     _svcode = bot_config_data.get("server_code", "")
     _aptype = bot_config_data.get("access_point_type", "?")
-    print(f"  [DEBUG] _build_bot_config 完成: server_code={_svcode!r}, ap_type={_aptype!r}, sauth_json长度={len(_sauth) if _sauth else 0}, auth_method={bot_config_data.get('auth_method','?')}", flush=True)
+    _ptype = bot_config_data.get("platform_type", "pc")
+
+    # PE 端转换: 如果 platform_type == "pe", 将 sauth_json 转换为 PE 格式
+    # PE: platform=android, sdk_version=5.2.0, source_platform=android
+    if _ptype == "pe" and _sauth:
+        try:
+            _outer = json.loads(_sauth)
+            _inner_str = _outer.get("sauth_json", "")
+            if not _inner_str:
+                _inner_str = _sauth
+                _outer = {"sauth_json": _sauth}
+            _inner = json.loads(_inner_str)
+            _orig_platform = _inner.get("platform", "?")
+            # 只在 PC 格式时转换 (避免重复转换)
+            if _orig_platform.lower() in ("pc", "ad"):
+                _inner["platform"] = "android"
+                _inner["sdk_version"] = "5.2.0"
+                _inner["source_platform"] = "android"
+                _new_inner_str = json.dumps(_inner, ensure_ascii=False, separators=(",", ":"))
+                _new_outer = {"sauth_json": _new_inner_str}
+                bot_config_data["sauth_json"] = json.dumps(_new_outer, ensure_ascii=False, separators=(",", ":"))
+                logger.info(
+                    f"PE 端 sauth_json 转换完成: "
+                    f"platform { _orig_platform}→android, sdk_version→5.2.0"
+                )
+        except Exception as e:
+            logger.warning(f"PE 端 sauth_json 转换失败: {e}")
+
+    print(f"  [DEBUG] _build_bot_config 完成: server_code={_svcode!r}, ap_type={_aptype!r}, platform={_ptype!r}, sauth_json长度={len(_sauth) if _sauth else 0}, auth_method={bot_config_data.get('auth_method','?')}", flush=True)
 
     return BotConfig(
         name=bot_config_data.get("name", ""),
@@ -249,7 +279,7 @@ async def create_bot(req: CreateBotRequest, request: Request):
         server_code=req.server_code,
         server_type=req.server_type,
         access_point_type=req.access_point_type,
-        config=json.dumps(req.config, ensure_ascii=False),
+        config=json.dumps({**req.config, "platform_type": req.platform_type}, ensure_ascii=False),
     )
 
     await db.add_log(
@@ -305,6 +335,7 @@ async def list_bots(
                 "server_code": b["server_code"],
                 "server_type": b["server_type"],
                 "access_point_type": b["access_point_type"],
+                "platform_type": (json.loads(b["config"]) if b["config"] else {}).get("platform_type", "pc"),
                 "status": b["status"],
                 "created_at": b["created_at"],
                 "last_started_at": b["last_started_at"],
@@ -539,6 +570,10 @@ async def create_bot_from_pool(req: CreateBotFromPoolRequest, request: Request):
         config["sauth_json"] = pool_account_sauth
         config["sauth_updated_at"] = time.time()
         config["auth_method"] = "direct"
+
+    # 确保 config 中有 platform_type (默认 pc)
+    if not config.get("platform_type"):
+        config["platform_type"] = "pc"
 
     bot_id = await db.create_bot_instance(
         panel_id=panel_id,
@@ -901,6 +936,9 @@ async def update_bot_config(bot_id: str, req: UpdateBotConfigRequest, request: R
         config_modified = True
     if req.access_point_type is not None:
         old_config["access_point_type"] = req.access_point_type
+        config_modified = True
+    if req.platform_type is not None:
+        old_config["platform_type"] = req.platform_type
         config_modified = True
 
     config_json = json.dumps(old_config, ensure_ascii=False)

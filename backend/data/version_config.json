@@ -32,6 +32,7 @@
     "online_lobby": {
       "room_enter": "/online-lobby-room-enter",
       "search_by_name": "/online-lobby-room/query/search-by-name",
+      "search_by_name_v2": "/online-lobby-room/query/search-by-name-v2",
       "game_enter": "/online-lobby-game-enter"
     },
     "local_launcher": {
@@ -39,7 +40,7 @@
       "heartbeat": "http://127.0.0.1:8081/client/HeartBeat?mess="
     }
   },
-  "default_version": "3.8",
+  "default_version": "3.9",
   "versions": {
     "3.8": {
       "engine_version": "1.21.80",
@@ -67,10 +68,10 @@
       "_notes": "3.8 阉割了 replaceitem 命令 (来源: app/protocol/nbt_placer.py), 默认使用 STRUCTURE 平台模式. 详见 community_bot_analysis.md. PC/PE 认证端点 (auth_server_pc/auth_server_pe/api_server_pc) 与 3.9 共用同一套 x19/g79 基础设施 (来源: Community_Bot.exe strings)."
     },
     "3.9": {
-      "engine_version": "1.21.90",
+      "engine_version": "1.21.120",
       "patch_version": "3.9.0",
       "protocol_version": 10,
-      "min_engine_version": "1.21.90",
+      "min_engine_version": "1.21.120",
       "min_patch_version": "3.9.0",
       "auth_server": "https://g79authobt.minecraft.cn",
       "auth_server_alt": "https://g79authobt.nie.netease.com",
@@ -84,12 +85,12 @@
       "auth_server_pe": "https://g79obtapigtcoregray.minecraft.cn",
       "api_server_pc": "https://x19apigatewayobt.nie.netease.com",
       "patch_list_url": "https://g79.update.netease.com/patch_list/production/g79_rn_patchlist",
-      "sdk_version": "3.4.0",
+      "sdk_version": "3.9.0",
       "sdk_version_pe": "5.2.0",
       "gameid": "x19",
       "platform": "pc",
       "launcher_version": "1.10.7.22905",
-      "_notes": "3.9 引擎版本 1.21.90 经 Community_Bot.exe strings 验证. patch_version 3.9.0 经 Community_Bot 启动器.exe strings 验证 (明确显示 3.9.0). PC 认证端点 (x19obtcore:8443) / API 网关 (x19apigatewayobt) / patch_list URL 均来自 Community_Bot.exe strings. sdk_version=3.4.0 / gameid=x19 / platform=pc 来自 Community_Bot sauth_json 示例. replaceitem_limited=false 系推测 (3.9 可能恢复完整 replaceitem 能力), 实际以游戏内测试为准."
+      "_notes": "3.9 引擎版本 1.21.120 经 Community_Bot.exe 2026-07-22 release strings 验证. patch_version 3.9.0 经 Community_Bot 启动器.exe strings 验证. PC 认证端点 (x19obtcore:8443) / API 网关 (x19apigatewayobt) / patch_list URL 均来自 Community_Bot.exe strings. sdk_version=3.9.0 / gameid=x19 / platform=pc 来自 Community_Bot sauth_json 真实样本. replaceitem_limited=false 系推测 (3.9 可能恢复完整 replaceitem 能力), 实际以游戏内测试为准. 房间搜索支持 v2 端点 (search-by-name-v2)."
     }
   }
 }

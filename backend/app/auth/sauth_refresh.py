@@ -40,6 +40,10 @@ from app.auth.netease_direct.login_4399_oauth2 import (
     Login4399OAuth2,
     build_sauth_json,
 )
+from app.auth.netease_direct.phoenix_guest_auth import (
+    generate_fingerprint as generate_phoenix_fingerprint,
+    build_sauth_json as build_phoenix_sauth,
+)
 
 logger = logging.getLogger("pocketterm.sauth_refresh")
 
@@ -148,10 +152,24 @@ class SauthRefresher:
                     )
                     accounts = await db.get_active_sauth_accounts()
                 if not accounts:
-                    logger.warning("没有可用的 4399 账号, 无法刷新 sauth_json")
+                    logger.warning("没有可用的 4399 账号, 尝试 Phoenix 访客认证")
+                    try:
+                        sauth_str, uid = await self._refresh_via_phoenix()
+                        if sauth_str:
+                            self._cached_sauth = sauth_str
+                            self._cached_at = time.time()
+                            self._cached_uid = uid
+                            self._cached_username = "phoenix_guest"
+                            logger.info(
+                                f"sauth_json 通过 Phoenix 访客认证获取成功 "
+                                f"(sdkuid: {uid})"
+                            )
+                            return sauth_str
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(f"Phoenix 访客认证也失败: {e}")
                     await self._log_refresh(
                         db, success=False,
-                        message="刷新 sauth_json 失败: 没有可用的 4399 账号",
+                        message="刷新 sauth_json 失败: 没有可用的 4399 账号且 Phoenix 认证失败",
                         username="",
                     )
                     return self._cached_sauth or None
@@ -254,6 +272,22 @@ class SauthRefresher:
                     f"OAuth2 流程异常 (账号: {account_username}): {e}"
                 )
                 self._last_refresh_debug["oauth2_flow"] = {
+                    "status": "exception",
+                    "error": str(e),
+                }
+
+        # 最终回退: Phoenix 访客认证 (netease 频道, 完全绕过 4399)
+        if sauth_str is None:
+            logger.info(
+                f"回退到 Phoenix 访客认证 (账号: {account_username})"
+            )
+            try:
+                sauth_str, uid = await self._refresh_via_phoenix()
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    f"Phoenix 认证异常 (账号: {account_username}): {e}"
+                )
+                self._last_refresh_debug["phoenix_flow"] = {
                     "status": "exception",
                     "error": str(e),
                 }
@@ -707,6 +741,9 @@ class SauthRefresher:
     ) -> tuple[Optional[str], str]:
         """OAuth2 流程 (回退方案): 构建 4399com 频道 sauth_json。
 
+        优化: 现在使用带随机设备指纹和完整字段的 build_sauth_json,
+        并检查 uni_sauth/login-otp 验证结果。
+
         注意: 4399com 频道在 /login-otp 认证时可能返回 code=32。
 
         Returns:
@@ -721,17 +758,34 @@ class SauthRefresher:
                 }
                 return None, ""
 
-            sauth_dict = build_sauth_json(result.uid, result.sessionid)
+            # 使用 result 中已构建好的 sauth_json (已包含随机设备指纹和完整字段)
+            sauth_dict = result.sauth_json
+            sauth_inner = json.dumps(sauth_dict, ensure_ascii=False)
             sauth_str = json.dumps(
-                {"sauth_json": json.dumps(sauth_dict, ensure_ascii=False)},
-                ensure_ascii=False,
+                {"sauth_json": sauth_inner}, ensure_ascii=False
             )
+
             if not self._last_refresh_debug.get("final_channel"):
                 self._last_refresh_debug["final_channel"] = "4399com"
             self._last_refresh_debug["oauth2_flow"] = {
                 "status": "success",
                 "uid": result.uid,
+                "verified": result.verified,
+                "verification_code": result.verification_code,
             }
+
+            # 记录验证状态
+            if result.verified:
+                logger.info(
+                    f"OAuth2 流程验证成功 (4399com, uid={result.uid})"
+                )
+            else:
+                logger.warning(
+                    f"OAuth2 流程验证未通过 (4399com, uid={result.uid}, "
+                    f"code={result.verification_code}), "
+                    f"sauth_json 仍返回但可能无法用于 login-otp"
+                )
+
             return sauth_str, result.uid
         except Exception as e:
             self._last_refresh_debug["oauth2_flow"] = {
@@ -744,6 +798,55 @@ class SauthRefresher:
                 await client.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    async def _refresh_via_phoenix(self) -> tuple[Optional[str], str]:
+        """Phoenix 访客认证流程: 随机设备指纹 → 本地构建 netease 频道 sauth_json。
+
+        这是最终回退方案, 完全绕过 4399 登录和 code=32 问题。
+        使用随机生成的设备指纹, 在本地构建 netease 频道 sauth_json
+        (Fatalder 格式 sessionid), 无需联系第三方认证服务器。
+
+        若需要通过 Phoenix 认证服务器获取 chain_info (RakNet 连接凭证),
+        可使用 PhoenixGuestAuthClient.login() 完整流程。
+
+        逆向来源: lobbyd/auth/guest.go + lobbyd/auth/sauth.go。
+
+        Returns:
+            (sauth_json, uid) 或 (None, "")
+        """
+        try:
+            # 生成随机设备指纹 (Fatalder 格式)
+            fp = generate_phoenix_fingerprint()
+
+            # 本地构建 sauth_json (netease 频道, Fatalder 格式 sessionid)
+            sauth_inner = build_phoenix_sauth(fp)
+
+            # 双层包装 (外层 {"sauth_json": "..."})
+            sauth_str = json.dumps(
+                {"sauth_json": sauth_inner}, ensure_ascii=False
+            )
+
+            if not self._last_refresh_debug.get("final_channel"):
+                self._last_refresh_debug["final_channel"] = "netease"
+            self._last_refresh_debug["phoenix_flow"] = {
+                "status": "success",
+                "uid": fp.sdkuid,
+                "method": "local_build",
+                "sdk_version": fp.sdk_version,
+            }
+
+            logger.info(
+                f"Phoenix 访客认证成功 (netease 频道本地构建, "
+                f"sdkuid={fp.sdkuid}, sdk_version={fp.sdk_version})"
+            )
+            return sauth_str, fp.sdkuid
+
+        except Exception as e:
+            self._last_refresh_debug["phoenix_flow"] = {
+                "status": "exception",
+                "error": str(e),
+            }
+            raise
 
     # ------------------------------------------------------------------
     # 账号池管理

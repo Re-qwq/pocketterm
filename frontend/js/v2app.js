@@ -725,7 +725,12 @@
                 body: { email },
             });
             if (res.success) {
-                toastSuccess("验证码已发送至邮箱，请查收");
+                if (res.email_sent === false) {
+                    // 邮件服务未配置, 显示验证码 (开发模式)
+                    toastWarn(res.message || "邮件服务未配置");
+                } else {
+                    toastSuccess("验证码已发送至邮箱，请查收");
+                }
                 startEmailCodeCountdown(60);
             } else {
                 toastError(res.message || res.detail || "验证码发送失败");
@@ -2378,6 +2383,18 @@
                 $("botConfigServerCode").value = bot.server_code || "";
                 $("botConfigServerType").value = bot.server_type || "rental";
                 $("botConfigAccessPoint").value = bot.access_point_type || bot.access_point || "neomega";
+                // 加载平台类型 (pc/pe)
+                const platformEl = $("botConfigPlatformType");
+                if (platformEl) {
+                    let ptype = bot.platform_type;
+                    if (!ptype && bot.config) {
+                        try {
+                            const cfg = typeof bot.config === "string" ? JSON.parse(bot.config) : bot.config;
+                            ptype = cfg.platform_type;
+                        } catch (_) {}
+                    }
+                    platformEl.value = ptype || "pc";
+                }
                 const gameVersionEl = $("botConfigGameVersion");
                 // game_version 可能在 bot.game_version 或 config JSON 中
                 let gameVersion = bot.game_version;
@@ -2437,6 +2454,7 @@
             server_type: serverType,
             game_version,
             access_point_type: accessPoint,
+            platform_type: $("botConfigPlatformType")?.value || "pc",
             config: extra,
         };
 

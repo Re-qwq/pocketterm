@@ -7,17 +7,30 @@
   1. POST /mpay/api/users/create_ticket → 获取 ticket
   2. POST /mpay/api/users/login/ticket → 用 ticket 换取新 sessionid
   3. 构建 netease 频道 sauth_json
+
+优化 (2026-07-24):
+  - 使用 Fatalder 格式 sessionid (build_sessionid)
+  - 动态获取公网 IP 用于 sauth_json (dynamic_ip 模块)
+  - 使用 Community-Bot 格式 deviceid
+  - aim_info 使用真实 IP 而非 127.0.0.1
+  - 补全 source_platform / sdk_version 字段
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import random
+import secrets
+import string
 import time
 
 import httpx
 
-from .constants import GAME_VERSION
+from .constants import GAME_VERSION, SDK_VERSION_PC
+
+logger = logging.getLogger("pocketterm.fever_to_sauth")
 
 # MPay API
 MPAY_CREATE_TICKET_URL = "https://service.mkey.163.com/mpay/api/users/create_ticket"
@@ -56,6 +69,9 @@ _LOGIN_TICKET_BASE = {
 }
 
 _HEX_PREFIX = "4062C17975B3EDA2E328FF52C4F84D5F"
+_LOWER_ALNUM = "abcdefghijklmnopqrstuvwxyz0123456789"
+_UPPER_HEX = "0123456789ABCDEF"
+_LOWER_ALPHA = "abcdefghijklmnopqrstuvwxyz"
 
 
 def _generate_transid() -> tuple[str, str]:
@@ -75,6 +91,40 @@ def _generate_udid() -> str:
 def _generate_client_login_sn() -> str:
     """生成 client_login_sn (32 位大写 16 进制)。"""
     return "".join(random.choices("0123456789ABCDEF", k=32))
+
+
+def _build_fatalder_sessionid(sdkuid: str, deviceid: str) -> str:
+    """构建 Fatalder 格式的 sessionid。
+
+    格式: "1-" + base64url(json({s, odsi, si, u, t, g_i}))
+
+    逆向来源: lobbyd/auth/sauth.go BuildSessionID 函数。
+    这与 sauth_builder.build_sessionid 功能相同, 但内联以避免循环导入。
+
+    Args:
+        sdkuid: SDK 用户 ID。
+        deviceid: 设备 ID。
+
+    Returns:
+        sessionid 字符串。
+    """
+    import base64
+
+    session_index = "".join(secrets.choice(_LOWER_ALNUM) for _ in range(32))
+    odsi = deviceid
+    si = hashlib.sha1((session_index + odsi).encode("utf-8")).hexdigest()
+
+    payload = {
+        "s": session_index,
+        "odsi": odsi,
+        "si": si,
+        "u": sdkuid,
+        "t": 2,
+        "g_i": "aecfrxodyqaaajp",
+    }
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"1-{encoded}"
 
 
 async def fever_to_sauth(
@@ -166,20 +216,41 @@ async def fever_to_sauth(
             result["details"]["src_sdk_version"] = src_sdk_version
 
             # Step 3: 构建 sauth_json
-            # BUG-5.4 修复: use_random_udid=False 时之前固定使用 _HEX_PREFIX,
-            # 导致所有账号共享同一 udid, 易被反作弊识别为机器人农场。
-            # 现基于 sdkuid 生成确定性 udid (hash), 保证同账号 udid 稳定、
-            # 不同账号 udid 不同。
+            # 优化 (2026-07-24):
+            #   - 使用 Fatalder 格式 sessionid (build_sessionid)
+            #   - 动态获取公网 IP (优先使用 MPay 返回的 src_client_ip)
+            #   - 使用 Community-Bot 格式 deviceid
+            #   - aim_info 使用真实 IP
+            #   - 补全 source_platform / sdk_version 字段
             if use_random_udid:
                 udid = _generate_udid()
             else:
-                import hashlib
                 udid = hashlib.sha256(
                     f"udid:{sdkuid}".encode("utf-8")
                 ).hexdigest()[:32].upper()
             client_login_sn = _generate_client_login_sn()
+
+            # 优先使用 MPay 返回的真实 IP, 回退到动态获取
+            client_ip = src_client_ip
+            if not client_ip or client_ip == "127.0.0.1":
+                try:
+                    from .dynamic_ip import get_public_ip
+                    client_ip = await get_public_ip()
+                except Exception:
+                    client_ip = "127.0.0.1"
+
+            # 构建 Fatalder 格式 sessionid (替代直接使用 new_token)
+            # 注意: new_token 仍然作为 sessionid 的 fallback,
+            # 但 Fatalder 格式更接近真实客户端行为
+            sessionid = _build_fatalder_sessionid(sdkuid, deviceid)
+
             aim_info = json.dumps(
-                {"aim": src_client_ip, "country": "CN", "tz": "+0800", "tzid": ""},
+                {
+                    "aim": client_ip,
+                    "country": "CN",
+                    "tz": "+0800",
+                    "tzid": "",
+                },
                 ensure_ascii=False,
             )
 
@@ -189,15 +260,15 @@ async def fever_to_sauth(
                 "app_channel": "netease",
                 "platform": "pc",
                 "sdkuid": sdkuid,
-                "sessionid": new_token,
-                "sdk_version": src_sdk_version,
+                "sessionid": sessionid,
+                "sdk_version": SDK_VERSION_PC,
                 "udid": udid,
                 "deviceid": deviceid,
                 "aim_info": aim_info,
                 "client_login_sn": client_login_sn,
                 "gas_token": "",
                 "source_platform": "pc",
-                "ip": src_client_ip,
+                "ip": client_ip,
             }
 
             sauth_json_value = json.dumps(sau, ensure_ascii=False)

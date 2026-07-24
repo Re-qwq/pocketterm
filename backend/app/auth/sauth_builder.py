@@ -95,8 +95,12 @@ Community-Bot 提取的完整 sauth_json 示例
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
+import secrets
+import string
 from typing import Any, Dict, Optional
 
 # ---------------------------------------------------------------------------
@@ -126,9 +130,13 @@ PLATFORM_PC: str = "pc"
 PLATFORM_PE: str = "pe"
 
 #: PC SDK 版本号 (sauth_json.sdk_version 字段)。
-#: 来源: Community-Bot.exe strings sauth_json 示例 (3.4.0) +
-#: 既有 constants.py SDK_VERSION_PC (3.4.0), 二者一致。
-SDK_VERSION_PC: str = "3.4.0"
+#: 来源: Community_Bot 启动器.exe 2026-07-22 release strings 验证,
+#: 真实 sauth_json 样本中 sdk_version="3.9.0"。
+#: 注意: 旧版 (3.4.0) 仍然保留作为 3.8 版本的兼容值。
+SDK_VERSION_PC: str = "3.9.0"
+
+#: 旧版 PC SDK 版本 (3.8 协议, 向后兼容)。
+SDK_VERSION_PC_LEGACY: str = "3.4.0"
 
 #: PE SDK 版本号。
 #: 来源: 既有 constants.py SDK_VERSION_PE。
@@ -139,6 +147,122 @@ DEFAULT_AIM: str = "100.100.100.100"
 DEFAULT_COUNTRY: str = "CN"
 DEFAULT_TZ: str = "+0800"
 DEFAULT_TZID: str = ""
+
+_HEX_UPPER = "0123456789ABCDEF"
+
+
+# ===========================================================================
+# 设备指纹生成 (匹配 Community-Bot 真实样本格式)
+# ===========================================================================
+def generate_udid() -> str:
+    """生成 32 字符大写 HEX udid。
+
+    匹配 Community-Bot 真实样本: ``791D246181706561A98D989C065385D4``
+    """
+    return "".join(secrets.choice(_HEX_UPPER) for _ in range(32))
+
+
+def generate_client_login_sn() -> str:
+    """生成 32 字符大写 HEX client_login_sn。
+
+    匹配 Community-Bot 真实样本: ``E95FE831B4EA523F32756513F6CA9D2A``
+    """
+    return "".join(secrets.choice(_HEX_UPPER) for _ in range(32))
+
+
+def generate_deviceid() -> str:
+    """生成 deviceid (Community-Bot 格式)。
+
+    格式: ``amaw`` + 12 个小写字母 + ``-d``
+    匹配 Community-Bot 真实样本: ``amawpzqaav7l4ns7-d``
+    """
+    letters = string.ascii_lowercase
+    suffix = "".join(secrets.choice(letters) for _ in range(12))
+    return f"amaw{suffix}-d"
+
+
+def generate_device_fingerprint() -> dict:
+    """生成完整的设备指纹 (匹配 Community-Bot 格式)。
+
+    Returns:
+        dict: {udid, deviceid, client_login_sn}
+    """
+    return {
+        "udid": generate_udid(),
+        "deviceid": generate_deviceid(),
+        "client_login_sn": generate_client_login_sn(),
+    }
+
+
+# ===========================================================================
+# sessionid 构建 (Fatalder/Community-Bot 兼容格式)
+# ===========================================================================
+
+#: 游戏内部 ID (g_i 字段, 来自 lobbyd/auth/sauth.go)。
+_GAME_INTERNAL_ID: str = "aecfrxodyqaaajp"
+
+#: 随机字符集 (小写字母 + 数字)。
+_LOWER_ALNUM: str = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def build_sessionid(
+    sdkuid: str,
+    deviceid: str,
+    session_index: str = "",
+) -> str:
+    """构建 Fatalder/Community-Bot 兼容的 sessionid。
+
+    格式: ``"1-" + base64url(json({s, odsi, si, u, t, g_i}))``
+
+    其中:
+      - ``s``: 随机 32 字符会话字符串 (session_index)
+      - ``odsi``: deviceid (设备 ID)
+      - ``si``: sha1(s + odsi) 的十六进制表示
+      - ``u``: sdkuid
+      - ``t``: 固定值 2
+      - ``g_i``: 游戏内部 ID ``"aecfrxodyqaaajp"``
+
+    逆向来源: ``lobbyd/auth/sauth.go`` BuildSessionID 函数。
+
+    Community-Bot 真实样本中的 sessionid 就是这个格式::
+
+        "1-eyJzIjoieW5nY2VwdDZoOGRodjA1bXlvcTliYTRmOWZ6MjlrZTdvIiwi...
+        (base64url 解码后为 {s, odsi, si, u, t, g_i} 的 JSON)
+
+    Args:
+        sdkuid: SDK 用户 ID。
+        deviceid: 设备 ID。
+        session_index: 可选的会话索引 (默认随机生成 32 字符)。
+
+    Returns:
+        sessionid 字符串 (``"1-" + base64url 编码的 JSON``)。
+    """
+    if not session_index:
+        session_index = "".join(
+            secrets.choice(_LOWER_ALNUM) for _ in range(32)
+        )
+
+    odsi = deviceid
+
+    # si = sha1(session_index + odsi).hex()
+    si = hashlib.sha1(
+        (session_index + odsi).encode("utf-8")
+    ).hexdigest()
+
+    payload = {
+        "s": session_index,
+        "odsi": odsi,
+        "si": si,
+        "u": sdkuid,
+        "t": 2,
+        "g_i": _GAME_INTERNAL_ID,
+    }
+
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    encoded = base64.urlsafe_b64encode(
+        raw.encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    return f"1-{encoded}"
 
 
 # ===========================================================================
@@ -178,23 +302,34 @@ class SAuthBuilder:
         country: str = DEFAULT_COUNTRY,
         tz: str = DEFAULT_TZ,
         tzid: str = DEFAULT_TZID,
+        client_login_sn: str = "",
+        gas_token: str = "",
+        source_platform: str = "pc",
+        ip: str = "",
     ) -> str:
         """构建 PC 端 sauth_json (platform=pc, gameid=x19)。
 
-        对应 Community-Bot.exe strings 提取的完整 sauth_json 示例。
+        对应 Community_Bot 启动器.exe 2026-07-22 release strings 验证的
+        真实 sauth_json 样本格式。
+
+        更新 (2026-07-24): 根据 Community-Bot 真实样本补全字段:
+        - client_login_sn: 32 字符大写 HEX (会话唯一标识)
+        - gas_token: 空字符串 (MPay token, netease 频道为空)
+        - source_platform: "pc"
+        - ip: 客户端 IP (样本中使用真实 IP)
 
         Parameters
         ----------
         sdkuid:
-            SDK 用户 ID (登录后由网易服务器返回, 如 ``aebghyp62fz2pwms``)。
+            SDK 用户 ID (登录后由网易服务器返回, 如 ``aebf55jjcrgddugj``)。
         sessionid:
             会话 ID (``1-`` 前缀 + base64 payload, 如 ``1-eyJzaSI6Ij...``)。
         udid:
-            设备唯一标识 (32 字符 hex, 如 ``d1a91970b6aa41e59a0aeaea42c55abf``)。
+            设备唯一标识 (32 字符大写 HEX, 如 ``791D246181706561A98D989C065385D4``)。
         deviceid:
-            设备 ID (含 ``-d`` 后缀, 如 ``amawhyiaanju3rfe-d``)。
+            设备 ID (``amaw`` 前缀 + 12 小写字母 + ``-d`` 后缀, 如 ``amawpzqaav7l4ns7-d``)。
         sdk_version:
-            SDK 版本号 (默认 ``3.4.0``, 来自 Community-Bot)。
+            SDK 版本号 (默认 ``3.9.0``, 来自 Community-Bot 2026-07-22 release)。
         gameid:
             游戏 ID (默认 ``x19``)。
         aim:
@@ -205,6 +340,14 @@ class SAuthBuilder:
             时区 (默认 ``+0800``)。
         tzid:
             时区 ID (默认空字符串)。
+        client_login_sn:
+            客户端登录序列号 (32 字符大写 HEX, 默认空则不包含)。
+        gas_token:
+            GAS 令牌 (默认空字符串)。
+        source_platform:
+            来源平台 (默认 ``pc``)。
+        ip:
+            客户端 IP 地址 (默认空则使用 aim 值)。
 
         Returns
         -------
@@ -229,6 +372,10 @@ class SAuthBuilder:
             "udid": udid,
             "deviceid": deviceid,
             "aim_info": aim_info,
+            "client_login_sn": client_login_sn,
+            "gas_token": gas_token,
+            "source_platform": source_platform,
+            "ip": ip or aim,
         }
         result = json.dumps(payload, ensure_ascii=False)
         logger.debug(
@@ -323,6 +470,10 @@ class SAuthBuilder:
         country: str = DEFAULT_COUNTRY,
         tz: str = DEFAULT_TZ,
         tzid: str = DEFAULT_TZID,
+        client_login_sn: str = "",
+        gas_token: str = "",
+        source_platform: str = "",
+        ip: str = "",
     ) -> str:
         """根据 :class:`~app.protocol.version_manager.MinecraftVersion` 构建 sauth_json。
 
@@ -412,6 +563,10 @@ class SAuthBuilder:
             "udid": udid,
             "deviceid": deviceid,
             "aim_info": aim_info,
+            "client_login_sn": client_login_sn,
+            "gas_token": gas_token,
+            "source_platform": source_platform or (PLATFORM_PC if is_pc else PLATFORM_PE),
+            "ip": ip or aim,
         }
         result = json.dumps(payload, ensure_ascii=False)
         logger.debug(
@@ -521,6 +676,12 @@ class SAuthBuilder:
 __all__ = [
     "SAuthBuilder",
     "SAuthBuildError",
+    # 构建器函数
+    "build_sessionid",
+    "generate_udid",
+    "generate_client_login_sn",
+    "generate_deviceid",
+    "generate_device_fingerprint",
     # 常量
     "GAMEID_PC",
     "GAMEID_PE",

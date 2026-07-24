@@ -1105,13 +1105,43 @@ class NeteaseDirectClient:
     async def search_rental_server(self, server_code: str) -> dict:
         """搜索租赁服。
 
-        API: POST /rental-server/query/search-by-name
+        优先使用 v2 端点 (Community-Bot 2026-07-22 release 使用),
+        v2 失败时回退到 v1 端点。
+
+        API v2: POST /rental-server/query/search-by-name-v2
+        API v1: POST /rental-server/query/search-by-name
+
         返回包含 entity_id, name, owner_id 等的服务器信息。
         """
         body = {
             "server_name": server_code,
             "offset": 0,
         }
+
+        # 优先尝试 v2 端点 (Community-Bot 使用)
+        try:
+            data = await self._api_post(
+                "/rental-server/query/search-by-name-v2", body
+            )
+            code = data.get("code", -1)
+            if code == 0:
+                entities = data.get("entities", []) or []
+                if entities:
+                    logger.debug("租赁服搜索使用 v2 端点成功")
+                    # 找到匹配的服务器
+                    for ent in entities:
+                        if str(ent.get("name", "")) == server_code:
+                            return ent
+                    return entities[0]
+            # code != 0 时回退到 v1
+            logger.debug(
+                "v2 搜索返回 code=%d, 回退到 v1: %s",
+                code, data.get("message", ""),
+            )
+        except Exception as exc:
+            logger.debug("v2 搜索异常, 回退到 v1: %s", exc)
+
+        # 回退到 v1 端点
         data = await self._api_post("/rental-server/query/search-by-name", body)
 
         code = data.get("code", -1)
@@ -1131,6 +1161,65 @@ class NeteaseDirectClient:
 
         # 回退到第一个结果
         return entities[0]
+
+    async def search_online_lobby_room(self, room_name: str) -> dict:
+        """搜索联机大厅房间 (Community-Bot 兼容)。
+
+        API: POST /online-lobby-room/query/search-by-name-v2
+        Community-Bot 2026-07-22 release 使用的端点。
+
+        Args:
+            room_name: 房间名称 (租赁服编号)。
+
+        Returns:
+            房间信息字典, 包含 entity_id, name 等。
+        """
+        body = {
+            "server_name": room_name,
+            "offset": 0,
+        }
+        data = await self._api_post(
+            "/online-lobby-room/query/search-by-name-v2", body
+        )
+
+        code = data.get("code", -1)
+        if code != 0:
+            raise RuntimeError(
+                f"搜索联机大厅房间失败: code={code}, "
+                f"msg={data.get('message', '')}"
+            )
+
+        entities = data.get("entities", []) or []
+        if not entities:
+            raise RuntimeError(f"未找到联机大厅房间: {room_name}")
+
+        for ent in entities:
+            if str(ent.get("name", "")) == room_name:
+                return ent
+        return entities[0]
+
+    async def search_user_by_uid(self, uid: str) -> dict:
+        """按 UID 查询用户信息 (Community-Bot 兼容)。
+
+        API: POST /user/query/search-by-uid
+
+        Args:
+            uid: 用户 UID。
+
+        Returns:
+            用户信息字典。
+        """
+        body = {"uid": int(uid) if uid.isdigit() else uid}
+        data = await self._api_post("/user/query/search-by-uid", body)
+
+        code = data.get("code", -1)
+        if code != 0:
+            raise RuntimeError(
+                f"查询用户失败: code={code}, msg={data.get('message', '')}"
+            )
+
+        entity = data.get("entity") or {}
+        return entity
 
     async def enter_rental_server(
         self, server_id: str, password: str = ""
@@ -1546,11 +1635,13 @@ def generate_sauth_json(
     mode: str = "pc",
     sdkuid: str = "",
     sessionid: str = "",
+    client_ip: str = "",
 ) -> str:
     """生成 sauth_json 字符串。
 
     构造一个基本的设备认证 JSON，用于登录。
-    参考: Drug.NetEase.Opensource 源码中的 sauth_json 格式。
+    参考: Drug.NetEase.Opensource 源码中的 sauth_json 格式
+    及 Community-Bot 2026-07-22 release 中的真实 sauth_json 样本。
 
     Args:
         device_model: 设备型号 (PC 模式不需要)
@@ -1558,6 +1649,9 @@ def generate_sauth_json(
         mode: 模式 (pe/pc)
         sdkuid: SDK 用户 ID (为空时自动生成)
         sessionid: 会话 ID (为空时自动生成)
+        client_ip: 客户端公网 IP (为空时使用 127.0.0.1;
+            Community-Bot 的真实 sauth_json 包含客户端公网 IP,
+            如 "223.160.217.51"。可通过 get_public_ip() 获取)
 
     Returns:
         sauth_json 字符串，格式为 ``{"sauth_json":"<inner>"}``
@@ -1570,8 +1664,20 @@ def generate_sauth_json(
     if not sessionid:
         sessionid = secrets.token_hex(16)
 
-    udid = secrets.token_hex(16)
+    udid = secrets.token_hex(16).upper()
     deviceid = str(uuid.uuid4())
+
+    # IP: 优先使用传入的 client_ip, 否则使用 127.0.0.1
+    # Community-Bot 的真实 sauth_json 包含客户端公网 IP,
+    # 使用真实 IP 更接近真实客户端行为
+    ip = client_ip or "127.0.0.1"
+
+    aim_info = json.dumps({
+        "aim": ip,
+        "country": "CN",
+        "tz": "+0800",
+        "tzid": "",
+    }, ensure_ascii=False, separators=(",", ":"))
 
     inner = json.dumps({
         "gameid": "g79" if mode == "pe" else "x19",
@@ -1583,16 +1689,50 @@ def generate_sauth_json(
         "sdk_version": SDK_VERSION_PC if mode == "pc" else SDK_VERSION_PE,
         "udid": udid,
         "deviceid": deviceid,
-        "aim_info": json.dumps({
-            "aim": "127.0.0.1",
-            "country": "CN",
-            "tz": "+0800",
-            "tzid": "",
-        }),
+        "aim_info": aim_info,
         "client_login_sn": secrets.token_hex(16).upper(),
         "gas_token": "",
         "source_platform": platform,
-        "ip": "127.0.0.1",
+        "ip": ip,
     }, ensure_ascii=False, separators=(",", ":"))
 
     return json.dumps({"sauth_json": inner}, ensure_ascii=False)
+
+
+async def get_public_ip(timeout: float = 5.0) -> str:
+    """获取本机公网 IP 地址。
+
+    用于 sauth_json 中的 aim_info 和 ip 字段,
+    使认证请求更接近真实客户端行为 (Community-Bot 的 sauth_json 包含真实公网 IP)。
+
+    依次尝试多个 IP 查询服务, 任一成功即返回。
+    全部失败时返回 "127.0.0.1"。
+
+    Args:
+        timeout: 单个请求超时秒数。
+
+    Returns:
+        公网 IP 地址字符串。
+    """
+    services = [
+        ("https://api.ipify.org?format=text", "text"),
+        ("https://ifconfig.me/ip", "text"),
+        ("https://api.ip.sb/ip", "text"),
+    ]
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for url, _ in services:
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    ip = resp.text.strip()
+                    # 验证是有效 IP
+                    import ipaddress
+                    ipaddress.ip_address(ip)
+                    logger.debug("获取公网 IP 成功: %s (via %s)", ip, url)
+                    return ip
+            except Exception:
+                continue
+
+    logger.warning("获取公网 IP 失败, 使用 127.0.0.1")
+    return "127.0.0.1"

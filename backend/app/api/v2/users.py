@@ -231,6 +231,52 @@ def _send_email(to_email: str, subject: str, body: str) -> bool:
     return False
 
 
+async def _send_email_async(to_email: str, subject: str, body: str) -> bool:
+    """异步发送邮件，优先使用 Resend HTTP API，回退到 SMTP。
+
+    与 _send_email 功能相同，但 Resend 部分使用 httpx.AsyncClient (真正的异步),
+    SMTP 部分仍需在线程池中执行 (smtplib 是同步库)。
+    """
+    # 1. 尝试 Resend API (异步)
+    api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if api_key:
+        sender = os.environ.get(
+            "RESEND_FROM", "PocketTerm <onboarding@resend.dev>"
+        ).strip()
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": sender,
+                        "to": [to_email],
+                        "subject": subject,
+                        "text": body,
+                    },
+                )
+                if resp.status_code in (200, 201):
+                    logger.info("Resend 邮件发送成功 (async): %s", to_email)
+                    return True
+                logger.error(
+                    "Resend 邮件发送失败 (async): status=%s, body=%s",
+                    resp.status_code, resp.text[:200],
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Resend 邮件发送异常 (async, %s): %s", to_email, exc)
+
+    # 2. 回退到 SMTP (在线程池中执行)
+    import asyncio
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _send_email_smtp, to_email, subject, body
+    )
+
+
 # ============================================================================
 # 注册
 # ============================================================================
@@ -436,20 +482,23 @@ async def send_email_code(req: SendEmailCodeRequest, request: Request):
     )
 
     if not has_resend and not has_smtp:
+        logger.warning(
+            "邮件未配置 (RESEND_API_KEY 和 SMTP_HOST/USER/PASS 均未设置), "
+            "验证码 %s 仅存入数据库, 不会发送邮件: %s",
+            code, email,
+        )
         return {
             "success": True,
-            "message": "验证码已生成 (邮件未配置, 验证码: " + code + ")",
+            "message": "邮件服务未配置, 验证码: " + code,
+            "email_sent": False,
+            "code": code,  # 仅在未配置邮件时返回明文验证码 (开发模式)
         }
 
-    # 在后台线程中发送邮件, 不阻塞响应
+    # 在后台异步发送邮件, 不阻塞响应
     import asyncio
-    loop = asyncio.get_event_loop()
-    # 使用 run_in_executor 在线程池中执行同步的 _send_email
-    asyncio.ensure_future(
-        loop.run_in_executor(None, _send_email, email, subject, body)
-    )
+    asyncio.ensure_future(_send_email_async(email, subject, body))
 
-    return {"success": True, "message": "验证码已发送"}
+    return {"success": True, "message": "验证码已发送", "email_sent": True}
 
 
 @router.post("/email/verify")

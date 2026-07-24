@@ -65,6 +65,13 @@ from .mcpc_solver import (
     OperatorChallengeMonitor as MCPCOperatorChallengeMonitor,
     PostponeActionQueue as MCPCPostponeActionQueue,
 )
+from .mcpc_remote_solver import (
+    CompositeMCPCSolver,
+    LocalMCPCSolver,
+    RemoteMCPCSolver,
+    create_default_solver as create_default_mcpc_solver,
+    create_solver_with_callbacks as create_mcpc_solver_with_callbacks,
+)
 
 # 新增模块导出 (逆向工程集成)
 from .postpone_actions import PostponeAction, PostponeActions
@@ -120,6 +127,12 @@ __all__ = [
     "MCPCChallengeSolver",
     "MCPCOperatorChallengeMonitor",
     "MCPCPostponeActionQueue",
+    # MCPC 远程求解器 (Community-Bot 兼容)
+    "CompositeMCPCSolver",
+    "LocalMCPCSolver",
+    "RemoteMCPCSolver",
+    "create_default_mcpc_solver",
+    "create_mcpc_solver_with_callbacks",
     # 逆向工程新增
     "PostponeAction",
     "PostponeActions",

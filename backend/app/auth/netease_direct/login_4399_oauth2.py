@@ -24,15 +24,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
+import secrets
 import string
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+
+logger = logging.getLogger("pocketterm.login_4399_oauth2")
 
 # ============================================================================
 # 常量 (来自 4399Login.cs)
@@ -50,7 +55,9 @@ REDIRECT_URI = (
     "?gamekey=44770&game_key=115716"
 )
 SDK_VERSION = "3.12.2.503"
-SAUTH_SDK_VERSION = "3.12.2"
+# NovaBuilder 1.3.4 (SW 面板抓包验证) 使用 "1.0.0" 作为 4399com 频道的 sdk_version
+# 与 Community-Bot 的 netease 频道 (3.9.0) 不同
+SAUTH_SDK_VERSION = "1.0.0"
 
 CAPTCHA_URL = "https://ptlogin.4399.com/ptlogin/captcha.do"
 OAUTH_CALLBACK_URL = (
@@ -59,10 +66,14 @@ OAUTH_CALLBACK_URL = (
 )
 LOGIN_AND_AUTHORIZE_URL = OAUTH2_BASE_URL + "loginAndAuthorize.do"
 UNI_SAUTH_URL = "https://mgbsdk.matrix.netease.com/x19/sdk/uni_sauth"
+LOGIN_OTP_URL = "https://x19obtcore.nie.netease.com:8443/login-otp"
 
 GAME_ID = "x19"
 CHANNEL = "4399com"
 PLATFORM = "ad"
+
+# WPFLauncher User-Agent (用于网易端点请求, 不带 4399 Referer/Origin)
+NETEASE_UA = "WPFLauncher/0.0.0.0"
 
 _HEADERS = {
     "User-Agent": USER_AGENT,
@@ -70,6 +81,10 @@ _HEADERS = {
 
 # OCR 最大尝试次数
 OCR_MAX_ATTEMPTS = 10
+
+_HEX_CHARS = "0123456789ABCDEF"
+_ALPHA_LOWER = "abcdefghijklmnopqrstuvwxyz"
+_ALPHA_LOWER_DIGITS = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 
 # ============================================================================
@@ -84,6 +99,8 @@ class OAuth2Result:
     sessionid: str       # 完整 state 字符串
     sauth_json: dict
     raw_cookie: dict
+    verified: bool = False       # uni_sauth + login-otp 是否验证通过
+    verification_code: int = -1 # 验证端点返回的 code (0=成功)
 
 
 # ============================================================================
@@ -98,10 +115,40 @@ def generate_captcha_id() -> str:
     return uuid.uuid4().hex.upper()
 
 
+def _random_hex(length: int = 32) -> str:
+    """生成随机大写 HEX 字符串 (用于 deviceid/client_login_sn)。"""
+    return "".join(secrets.choice(_HEX_CHARS) for _ in range(length))
+
+
+def _random_hex_lower(length: int = 32) -> str:
+    """生成随机小写 HEX 字符串 (NovaBuilder 格式)。"""
+    return "".join(secrets.choice("0123456789abcdef") for _ in range(length))
+
+
 def _random_udid() -> str:
     """生成 16 位随机字母数字 udid。"""
     chars = string.ascii_letters + string.digits
     return "".join(random.choices(chars, k=16))
+
+
+def generate_device_fingerprint() -> dict:
+    """生成随机设备指纹 (NovaBuilder 兼容格式)。
+
+    根据 SW 面板抓包数据 (fa.pioneershop.pw) 中 NovaBuilder 1.3.4 的
+    cookie.json 真实样本:
+        - client_login_sn 和 deviceid 使用相同的值
+        - 格式为 32 位小写 HEX (如 7c3689151fdf402f9b47b6f2af9efdb7)
+        - udid 为 16 位小写 HEX (如 0947b560c348e447)
+
+    Returns:
+        dict: {client_login_sn, deviceid, udid}
+    """
+    sn = _random_hex_lower(32)
+    return {
+        "client_login_sn": sn,
+        "deviceid": sn,
+        "udid": _random_hex_lower(16),
+    }
 
 
 async def fetch_captcha_image(captcha_id: str) -> bytes:
@@ -277,43 +324,129 @@ async def _get_oauth_callback(location_url: str) -> dict:
         }
 
 
-def build_sauth_json(uid: str, state: str) -> dict:
+def build_sauth_json(
+    uid: str,
+    state: str,
+    username: str = "",
+    device_fp: Optional[dict] = None,
+) -> dict:
     """构建 sauth_json (4399com 频道)。
 
-    与 WPFLauncher_Hook 的 BuildSauthJson 一致。
+    与 WPFLauncher_Hook 的 BuildSauthJson 一致,但使用随机设备指纹防封。
+
+    优化点 (参考 NovaBuilder 1.3.4 SW 面板抓包数据):
+        - client_login_sn/deviceid 使用相同的随机 32 位小写 HEX (不再硬编码)
+        - realname 使用 realname_type:"0" (字符串, 匹配 NovaBuilder 实际格式)
+        - 新增 get_access_token/is_unisdk_guest/source_app_channel 字段
+        - aim_info 包含 celluar_ip/operator/is_vpn_enabled 扩展字段
+        - tzid 设为 "Asia/Shanghai" (匹配 NovaBuilder)
+        - udid 为 16 位小写 HEX (匹配 NovaBuilder)
+
+    NovaBuilder 真实样本 (2026-07-21 SW 面板抓包):
+        sdk_version: "1.0.0"
+        realname: {"realname_type": "0"}
+        udid: "0947b560c348e447" (16 位小写 hex)
+        client_login_sn == deviceid: "7c3689151fdf402f9b47b6f2af9efdb7"
+        source_app_channel: "4399com"
+
+    Args:
+        uid: 4399 用户 UID。
+        state: OAuth2 state 字符串 (uid|access_token|...)。
+        username: 4399 用户名 (用于 userid 字段)。
+        device_fp: 设备指纹 (可选, 默认随机生成)。
+
+    Returns:
+        sauth_json 字典。
     """
+    fp = device_fp or generate_device_fingerprint()
+    aim_info = json.dumps({
+        "aim": "127.0.0.1",
+        "country": "CN",
+        "tz": "+0800",
+        "tzid": "Asia/Shanghai",
+        "celluar_ip": "",
+        "operator": "",
+        "is_vpn_enabled": False,
+    }, ensure_ascii=False)
     return {
-        "aim_info": '{"aim":"127.0.0.1","country":"CN","tz":"+0800","tzid":""}',
-        "realname": '{"realname_type":2}',
+        "aim_info": aim_info,
         "app_channel": CHANNEL,
         "platform": PLATFORM,
-        "client_login_sn": "4399FuckYou",
+        "client_login_sn": fp["client_login_sn"],
+        "deviceid": fp["deviceid"],
         "gameid": GAME_ID,
+        "gas_token": "",
+        "get_access_token": "1",
+        "ip": "127.0.0.1",
+        "is_unisdk_guest": 0,
         "login_channel": CHANNEL,
+        "realname": '{"realname_type":"0"}',
         "sdk_version": SAUTH_SDK_VERSION,
         "sdkuid": uid,
         "sessionid": state,
-        "udid": _random_udid(),
-        "deviceid": "4399FuckYou",
+        "source_app_channel": CHANNEL,
+        "source_platform": PLATFORM,
+        "udid": fp["udid"],
     }
 
 
 async def _post_uni_sauth(sauth_json_str: str) -> dict:
-    """POST sauth_json 到 uni_sauth (可选验证)。
+    """POST sauth_json 到 uni_sauth (网易统一认证)。
+
+    关键修复 (参考 sauth_refresh.py):
+        - 使用 WPFLauncher User-Agent (不带 4399 Referer/Origin)
+        - 使用独立的 HTTP client (不携带 4399 session cookies)
+        - 带 4399 Referer/Origin 会导致 uni_sauth 返回 502
+
+    Args:
+        sauth_json_str: sauth_json 内层 JSON 字符串。
 
     Returns:
-        dict: uni_sauth 响应
+        uni_sauth 响应 dict (包含 code 字段, 0=成功)。
     """
-    async with httpx.AsyncClient(timeout=15) as client:
+    _netease_headers = {
+        "User-Agent": NETEASE_UA,
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(
+        timeout=20, verify=False, headers=_netease_headers
+    ) as client:
         resp = await client.post(
             UNI_SAUTH_URL,
-            content=sauth_json_str,
-            headers={**_HEADERS, "Content-Type": "application/json"},
+            content=sauth_json_str.encode("utf-8"),
         )
         try:
             return resp.json()
         except Exception:
-            return {"raw": resp.text}
+            return {"raw": resp.text, "code": -1, "status_code": resp.status_code}
+
+
+async def _post_login_otp(sauth_wrapped_str: str) -> dict:
+    """POST 包装后的 sauth_json 到 login-otp (最终验证)。
+
+    与 sauth_refresh.py 的 MPay 流程 Step 8 一致。
+
+    Args:
+        sauth_wrapped_str: 包装后的 JSON 字符串 ({"sauth_json": "..."})
+
+    Returns:
+        login-otp 响应 dict (包含 code 字段, 0=成功)。
+    """
+    _netease_headers = {
+        "User-Agent": NETEASE_UA,
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(
+        timeout=20, verify=False, headers=_netease_headers
+    ) as client:
+        resp = await client.post(
+            LOGIN_OTP_URL,
+            content=sauth_wrapped_str.encode("utf-8"),
+        )
+        try:
+            return resp.json()
+        except Exception:
+            return {"raw": resp.text, "code": -1, "status_code": resp.status_code}
 
 
 # ============================================================================
@@ -444,8 +577,11 @@ class Login4399OAuth2:
                 if not uid:
                     return None
 
-                # 构建 sauth_json
-                sauth_json = build_sauth_json(uid, state)
+                # 构建 sauth_json (使用随机设备指纹, 防封优化)
+                device_fp = generate_device_fingerprint()
+                sauth_json = build_sauth_json(
+                    uid, state, username=username, device_fp=device_fp
+                )
 
                 # 提取 access_token (从 state 中解析)
                 token = ""
@@ -454,12 +590,50 @@ class Login4399OAuth2:
                     if len(parts) > 1:
                         token = parts[1]
 
-                # 可选: POST uni_sauth (不阻塞, 仅验证)
+                # Step 6: uni_sauth 验证 (不再忽略失败)
+                verified = False
+                verification_code = -1
                 try:
                     sauth_str = json.dumps(sauth_json, ensure_ascii=False)
-                    await _post_uni_sauth(sauth_str)
-                except Exception:
-                    pass  # uni_sauth 失败不影响登录结果
+                    uni_resp = await _post_uni_sauth(sauth_str)
+                    verification_code = uni_resp.get("code", -1)
+
+                    if verification_code == 0:
+                        logger.info(
+                            f"uni_sauth 验证成功 (4399com, uid={uid})"
+                        )
+                        # Step 7: login-otp 最终验证
+                        sauth_wrapped = json.dumps(
+                            {"sauth_json": sauth_str}, ensure_ascii=False
+                        )
+                        otp_resp = await _post_login_otp(sauth_wrapped)
+                        otp_code = otp_resp.get("code", -1)
+
+                        if otp_code == 0:
+                            logger.info(
+                                f"login-otp 验证成功 (4399com, uid={uid})"
+                            )
+                            verified = True
+                        else:
+                            logger.warning(
+                                f"login-otp 验证失败: code={otp_code}, "
+                                f"resp={str(otp_resp)[:200]}"
+                            )
+                            # login-otp 失败仍返回结果 (4399com 频道可能 code=32)
+                            # 调用方可根据 verified 字段决定是否使用
+                    elif verification_code == 32:
+                        logger.warning(
+                            f"uni_sauth 返回 code=32 (4399com 频道可能已失效), "
+                            f"uid={uid}"
+                        )
+                    else:
+                        logger.warning(
+                            f"uni_sauth 验证失败: code={verification_code}, "
+                            f"msg={uni_resp.get('message', '')}, "
+                            f"uid={uid}"
+                        )
+                except Exception as e:
+                    logger.warning(f"uni_sauth/login-otp 异常: {e}, uid={uid}")
 
                 return OAuth2Result(
                     uid=uid,
@@ -471,6 +645,8 @@ class Login4399OAuth2:
                         "state": state,
                         "username": username,
                     },
+                    verified=verified,
+                    verification_code=verification_code,
                 )
 
             # 错误处理
