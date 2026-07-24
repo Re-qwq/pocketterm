@@ -25,7 +25,6 @@ from typing import Optional
 
 from fastapi import (
     APIRouter,
-    BackgroundTask,
     File,
     Form,
     HTTPException,
@@ -34,6 +33,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 from app.config import DATA_DIR
