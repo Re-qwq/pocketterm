@@ -1027,6 +1027,78 @@ class NeteaseDirectClient:
         return resp.text
 
     # ------------------------------------------------------------------
+    # Token 刷新 (来源: InfBotLobby x19.h tokenupdate)
+    # ------------------------------------------------------------------
+
+    async def refresh_token(self) -> None:
+        """刷新认证 Token (定期调用以保持会话有效)。
+
+        来源: InfBotLobby x19.h tokenupdate() 方法。
+        端点: POST /authentication/update
+        请求体: {"entity_id": <uid>}
+        加密: x19_EncryptData (AES-CBC, x19 密钥集)
+        响应: 更新后的 token
+
+        InfBotLobby 每 100 秒刷新一次。
+        刷新后更新: login_src_token, login_md5_token, h5token
+        """
+        if not self.uid:
+            logger.warning("Token 刷新跳过: 未登录 (uid 为空)")
+            return
+
+        path = "/authentication/update"
+        body = json.dumps({"entity_id": self.uid}, ensure_ascii=False, separators=(",", ":"))
+
+        # 使用 G79V12 加密 (与 authentication-otp 一致)
+        encrypted = http_encrypt_g79v12(body.encode("utf-8"))
+
+        # 计算 user-token
+        token = compute_dynamic_token(path, body, self.login_src_token)
+
+        headers = {
+            "Content-Type": "application/json",
+            "user-token": token,
+            "user-id": self.uid,
+            "User-Agent": "WPFLauncher/0.0.0.0",
+            "Accept-Encoding": "identity",
+        }
+
+        url = f"{COREOBT_PC}/authentication/update"
+        resp = await self.client.post(url, content=encrypted, headers=headers)
+        body_bytes = resp.content
+
+        # 解密响应
+        decrypted = http_decrypt_g79v12(body_bytes)
+        text = decrypted.decode("utf-8", errors="replace")
+
+        try:
+            data = _parse_json_lenient(text)
+        except RuntimeError:
+            raise RuntimeError(
+                f"Token 刷新响应不是 JSON: {text[:300]}"
+            )
+
+        code = data.get("code", -1)
+        if code != 0:
+            raise RuntimeError(
+                f"Token 刷新失败: code={code}, msg={data.get('message', '')}"
+            )
+
+        entity = data.get("entity") or {}
+        new_token = str(entity.get("token", ""))
+
+        if new_token:
+            self.login_src_token = new_token
+            self.login_md5_token = hashlib.md5(new_token.encode()).hexdigest()
+            try:
+                self.h5token = base64.b64decode(new_token)
+            except Exception:
+                self.h5token = b""
+            logger.info("Token 刷新成功: uid=%s", self.uid)
+        else:
+            logger.warning("Token 刷新成功但响应中无 token 字段")
+
+    # ------------------------------------------------------------------
     # 租赁服操作
     # ------------------------------------------------------------------
 
