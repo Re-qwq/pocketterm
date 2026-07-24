@@ -272,6 +272,7 @@ def build_sauth_json(
         "platform": fp.platform,
         "sdkuid": fp.sdkuid,
         "sessionid": sessionid,
+        "sdk_version": fp.sdk_version,
         "udid": fp.udid,
         "deviceid": fp.deviceid,
         "aim_info": aim_info,
